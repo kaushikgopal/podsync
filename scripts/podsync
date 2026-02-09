@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#
+# Wrapper script for podsync CLI
+# Handles uv environment setup and runs the Python tool
+#
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC_DIR="$SCRIPT_DIR/src"
+
+# Check if uv is available
+if ! command -v uv &> /dev/null; then
+    echo "ERROR: uv is not installed. Install from https://docs.astral.sh/uv/" >&2
+    exit 1
+fi
+
+# Run the CLI via uv
+cd "$SRC_DIR"
+exec uv run podsync "$@"

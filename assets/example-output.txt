@@ -1,0 +1,26 @@
+Loading master: ep42-master.mp3
+  Duration: 58m32s at 44100Hz
+
+Processing ep42-host1-src-clean.wav...
+  Detecting speech regions... found 47m32s of speech
+  Correlating against master... offset: +1.23s (confidence: 0.94)
+  Measuring drift... 0.15s at master end
+  Writing ep42-host1-src-clean-synced.wav
+
+Processing ep42-host2-src-clean.wav...
+  Detecting speech regions... found 38m15s of speech
+  Correlating against master... offset: +0.87s (confidence: 0.91)
+  Measuring drift... 0.08s at master end
+  Writing ep42-host2-src-clean-synced.wav
+
+Writing output files...
+  Writing ep42-host1-src-clean-synced.wav
+  Writing ep42-host2-src-clean-synced.wav
+
+============================================================
+Summary:
+  ep42-host1-src-clean-synced.wav   offset: +1.23s   drift: 0.15s   ✓
+  ep42-host2-src-clean-synced.wav   offset: +0.87s   drift: 0.08s   ✓
+============================================================
+
+2 tracks synchronized successfully
