@@ -11,6 +11,8 @@ mod mfcc;
 mod sync;
 mod vad;
 
+use std::fmt::Write as FmtWrite;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -150,6 +152,78 @@ fn format_duration(seconds: f64) -> String {
     let minutes = total_secs / 60;
     let secs = total_secs % 60;
     format!("{}m{:02}s", minutes, secs)
+}
+
+// ---------------------------------------------------------------------------
+// Log file
+// ---------------------------------------------------------------------------
+
+/// Write a mini log file summarizing the sync run.
+///
+/// Placed next to the master file as `podsync.log`. Each run overwrites the
+/// previous log — the file reflects the most recent run only.
+fn write_log_file(
+    master_path: &Path,
+    master_duration: f64,
+    master_sr: u32,
+    results: &[TrackResult],
+) {
+    let log_path = master_path.parent().unwrap_or(Path::new(".")).join("podsync.log");
+
+    let mut log = String::new();
+
+    // --- Header ------------------------------------------------------------
+    writeln!(log, "podsync run").unwrap();
+    writeln!(log, "master: {} ({}, {}Hz)",
+        master_path.file_name().unwrap_or_default().to_string_lossy(),
+        format_duration(master_duration),
+        master_sr,
+    ).unwrap();
+    writeln!(log).unwrap();
+
+    // --- Per-track results -------------------------------------------------
+    writeln!(log, "tracks:").unwrap();
+
+    for result in results {
+        let input_name = result.path.file_name().unwrap_or_default().to_string_lossy();
+
+        if result.success() {
+            let output_name = result.output_path.as_ref().unwrap()
+                .file_name().unwrap_or_default().to_string_lossy();
+            let offset_str = format_time(result.offset.unwrap());
+            let confidence = result.confidence.unwrap_or(0.0);
+            let drift_str = match result.drift {
+                Some(d) => format!("{:.2}s", d),
+                None => "N/A".to_string(),
+            };
+            writeln!(log, "  {} → {}", input_name, output_name).unwrap();
+            writeln!(log, "    offset: {}  confidence: {:.2}  drift: {}", offset_str, confidence, drift_str).unwrap();
+        } else {
+            writeln!(log, "  {} — FAILED: {}", input_name, result.error.as_deref().unwrap_or("unknown")).unwrap();
+        }
+    }
+
+    // --- Summary line ------------------------------------------------------
+    let success_count = results.iter().filter(|r| r.success()).count();
+    let fail_count = results.len() - success_count;
+
+    writeln!(log).unwrap();
+    if fail_count > 0 {
+        writeln!(log, "result: {} succeeded, {} failed", success_count, fail_count).unwrap();
+    } else {
+        writeln!(log, "result: {} tracks synchronized", success_count).unwrap();
+    }
+
+    // --- Write to disk -----------------------------------------------------
+    match fs::write(&log_path, &log) {
+        Ok(()) => {
+            eprintln!("  Log written to {}", log_path.display());
+        }
+        Err(e) => {
+            // Log file is best-effort — don't fail the run over it.
+            eprintln!("  WARNING: could not write log file: {}", e);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +453,9 @@ fn main() {
     }
 
     eprintln!("{}", "=".repeat(60));
+
+    // --- Write log file ----------------------------------------------------
+    write_log_file(master_path, master_duration, master_sr, &results);
 
     if fail_count > 0 {
         eprintln!("\n{} succeeded, {} failed", success_count, fail_count);
