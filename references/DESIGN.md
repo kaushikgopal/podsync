@@ -32,10 +32,10 @@ Two components:
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │  CLI Tool (podsync)                                     │
-│  - Python script (managed by uv)                        │
+│  - Rust binary (built via cargo)                        │
 │  - Explicit parameters only                             │
 │  - Audio analysis + sync logic                          │
-│  - Outputs synced WAV files + report                    │
+│  - Outputs synced WAV files + log                       │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -55,7 +55,7 @@ Episode folder structure (e.g., `episodes/42/`):
 ```bash
 podsync \
   --master /path/to/ep-master.mp3 \
-  --tracks /path/to/host1-clean.wav /path/to/host2-clean.wav \
+  --tracks /path/to/host1-clean.wav --tracks /path/to/host2-clean.wav \
   --sync-window 120 \
   --output-suffix synced
 ```
@@ -65,28 +65,27 @@ podsync \
 | Flag | Required | Default | Description |
 |------|----------|---------|-------------|
 | `--master` | Yes | - | Master/sync reference track |
-| `--tracks` | Yes | - | Individual tracks to sync (space-separated) |
+| `--tracks` | Yes | - | Individual tracks to sync (repeat for multiple) |
 | `--sync-window` | No | 120 | Seconds of speech to use for correlation |
 | `--output-suffix` | No | `synced` | Suffix for output files |
 
 ### Output
 
 - Files written to same directory as input with `-{suffix}.wav` appended
-- All outputs: WAV format, 44.1kHz sample rate
+- All outputs: WAV format, 44.1kHz sample rate, 24-bit PCM
 - Console report with offset, drift, and any failures
+- Timestamped log file next to master
 
 ```
 Processing host1-src-clean.wav...
   Detecting speech regions... found 47m32s of speech
   Correlating against master... offset: +1.23s (confidence: 0.94)
   Measuring drift... 0.15s at master end
-  Writing host1-src-clean-synced.wav
 
 Processing host2-src-clean.wav...
   Detecting speech regions... found 38m15s of speech
   Correlating against master... offset: +0.87s (confidence: 0.91)
   Measuring drift... 0.08s at master end
-  Writing host2-src-clean-synced.wav
 
 Summary:
   host1-src-clean-synced.wav       offset: +1.23s   drift: 0.15s   ✓
@@ -140,7 +139,7 @@ MFCCs (Mel-frequency cepstral coefficients) are used instead of raw waveform com
 
 VAD ensures we correlate speech-to-speech, not silence-to-speech. This handles the case where one host is silent for the first few minutes while another does the intro.
 
-The algorithm finds the first region with at least 30 seconds of continuous speech, then uses that for correlation.
+The algorithm uses a three-tier fallback: first looks for a single long region (≥30s), then the longest region ≥10s, then accumulates nearby shorter regions.
 
 ### Drift Measurement
 
@@ -187,45 +186,42 @@ All synced tracks are trimmed/padded to match the master track length. This ensu
 
 ## Technology Stack
 
-### Python Libraries
+### Rust Crates
 
-| Library | Purpose |
-|---------|---------|
-| `librosa` | Audio loading, MFCC extraction, resampling |
-| `scipy` | Cross-correlation via `scipy.signal.correlate` |
-| `webrtcvad` or `silero-vad` | Voice activity detection |
-| `soundfile` | WAV output |
+| Crate | Purpose |
+|-------|---------|
+| `symphonia` | Audio decoding (MP3, WAV, FLAC, OGG, AIFF) |
+| `rubato` | Sample rate conversion (sinc interpolation) |
+| `hound` | 24-bit WAV output |
+| `webrtc-vad` | Voice activity detection (Google WebRTC C lib via FFI) |
+| `realfft` | FFT for MFCC extraction and cross-correlation |
+| `clap` | CLI argument parsing (derive macros) |
 
-### Package Management
+### Build
 
-Using `uv` (Astral) instead of pip for:
-- Isolated environments without virtualenv headaches
-- Fast, reliable dependency resolution
-- Single binary, no pip hell
-- Run with `uvx podsync` or install with `uv tool install`
+Standard cargo project in `scripts/`. `Makefile` at repo root runs
+`cargo build --release` and copies the binary to `scripts/podsync`.
 
 ## Directory Structure
 
 ```
 podsync/
 ├── SKILL.md                    # Main skill instructions
+├── Makefile                    # Build + copy binary
 ├── scripts/
-│   ├── podsync                 # Wrapper script (runs uv, handles build)
+│   ├── Cargo.toml              # Rust project root
+│   ├── Cargo.lock
 │   └── src/
-│       ├── pyproject.toml      # Python project config (uv compatible)
-│       ├── podsync/
-│       │   ├── __init__.py
-│       │   ├── cli.py          # CLI entry point
-│       │   ├── sync.py         # Cross-correlation logic
-│       │   ├── vad.py          # Voice activity detection
-│       │   └── audio.py        # Audio loading/writing
-│       └── tests/
-│           └── test_sync.py
+│       ├── main.rs             # CLI entry point
+│       ├── audio.rs            # Audio I/O
+│       ├── mfcc.rs             # MFCC feature extraction
+│       ├── sync.rs             # Cross-correlation logic
+│       └── vad.rs              # Voice activity detection
 ├── references/
 │   ├── DESIGN.md               # This document
 │   ├── ALGORITHM.md            # Deep dive on sync algorithm
 │   ├── TROUBLESHOOTING.md      # Common issues and solutions
-│   └── DEPENDENCIES.md         # Python libraries and why
+│   └── DEPENDENCIES.md         # Rust crates and why
 └── assets/
     └── example-output.txt      # Sample CLI output
 ```

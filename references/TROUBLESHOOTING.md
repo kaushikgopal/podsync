@@ -39,12 +39,12 @@
 
 **Cause:** Audio file format not supported or file corrupted.
 
-**Supported formats:**
-- WAV (all sample rates)
+**Supported formats (via symphonia):**
+- WAV (all sample rates, PCM)
 - MP3
 - AIFF
 - FLAC
-- OGG
+- OGG/Vorbis
 
 **Solutions:**
 1. Convert to WAV using ffmpeg: `ffmpeg -i input.xyz output.wav`
@@ -59,12 +59,18 @@ After running podsync, verify in your DAW:
 3. Solo each track briefly to confirm voices align
 4. Check a point in the middle and near the end for drift
 
+Check the log file (`podsync-<epoch>.log` next to the master) for a quick summary
+of offsets, confidence scores, and drift measurements.
+
 ## Performance
 
 For 1-hour episodes, expect:
-- ~30 seconds for loading/resampling
-- ~10 seconds for VAD per track
-- ~5 seconds for correlation per track
-- ~10 seconds for writing per track
+- ~5 seconds for loading/resampling per track
+- ~3 seconds for VAD per track
+- ~30 seconds for MFCC extraction and correlation per track
+- ~5 seconds for writing per track
 
-Total: ~2-3 minutes for a 2-person podcast
+Total: ~1-2 minutes for a 2-person podcast.
+
+The Rust implementation is single-threaded. The correlation step dominates
+runtime for longer recordings.

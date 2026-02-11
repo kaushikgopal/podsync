@@ -15,7 +15,7 @@ Automatically align individual participant audio tracks to a master recording so
 - **references/DESIGN.md** — Full design document with architecture decisions
 - **references/ALGORITHM.md** — Deep dive on MFCC cross-correlation sync algorithm
 - **references/TROUBLESHOOTING.md** — Common issues and solutions
-- **references/DEPENDENCIES.md** — Python libraries and rationale
+- **references/DEPENDENCIES.md** — Rust crates and rationale
 
 ## Workflow
 
@@ -59,7 +59,7 @@ Execute the CLI:
 ```bash
 podsync \
   --master "{master_path}" \
-  --tracks "{track1}" "{track2}" \
+  --tracks "{track1}" --tracks "{track2}" \
   --sync-window 120 \
   --output-suffix synced
 ```
@@ -70,13 +70,14 @@ Display the CLI output showing:
 - Offset applied to each track
 - Drift measured for each track
 - Any failures with reasons
+- Log file location
 
 ## CLI Reference
 
 ```bash
 podsync \
   --master <path>           # Master/sync reference track (required)
-  --tracks <path> [<path>]  # Individual tracks to sync (required, multiple)
+  --tracks <path>           # Individual tracks to sync (required, repeat for multiple)
   --sync-window <seconds>   # Seconds of speech for correlation (default: 120)
   --output-suffix <suffix>  # Output file suffix (default: synced)
 ```
@@ -85,13 +86,14 @@ podsync \
 
 - Synced files written to same directory as input
 - Filename format: `{original}-{suffix}.wav`
-- All outputs: WAV format at 44.1kHz
+- All outputs: 44.1kHz 24-bit WAV
 - All outputs match master track length
+- Timestamped log file written next to master
 
 ## Prerequisites
 
-- **podsync** CLI installed globally via `uv tool install`
-- See the repo README for install instructions
+- **podsync** binary built via `make` in the repo root
+- See the repo README for build instructions
 
 ## File Naming Conventions
 

@@ -38,25 +38,42 @@ Extract spectral features from both master and track:
 Audio → STFT → Mel filterbank → Log → DCT → MFCCs
 ```
 
-**Parameters:**
-- n_mfcc: 20 coefficients
+The MFCC pipeline matches librosa 0.11.0 defaults:
+- n_fft: 2048
 - hop_length: 512 samples (~11.6ms at 44.1kHz)
-- Window: Hann
+- Window: periodic Hann
+- Center padding: zero-pad n_fft/2 on each side before STFT
+- n_mels: 128 mel filterbank channels
+- Mel scale: Slaney (not HTK)
+- Filterbank normalization: Slaney (area normalization)
+- power_to_db: amin=1e-10, top_db=80.0
+- DCT: type II, orthonormal
+
+Each MFCC coefficient's time series is then normalized independently (zero mean, unit variance) before cross-correlation.
 
 ### 3. Cross-Correlation
 
 Find the lag that maximizes correlation between MFCC sequences:
 
-```python
-correlation = scipy.signal.correlate(master_mfcc, track_mfcc, mode='full')
-peak_idx = np.argmax(correlation)
-lag = peak_idx - (len(track_mfcc) - 1)
+```
+For each of 20 MFCC coefficients:
+    normalize to zero mean, unit variance
+    correlate(master_coeff, track_coeff)  // FFT-based, mode='full'
+    accumulate into summed correlation
+
+peak_idx = argmax(summed_correlation)
+lag = peak_idx - (len(track_mfcc) - 1)   // zero-lag index
 offset_seconds = lag * hop_length / sr
 ```
 
+Per-coefficient correlation preserves spectral discrimination. If we flattened
+first, high-energy coefficients would dominate and subtle spectral differences
+(like distinguishing two speakers) would be lost.
+
 **Confidence calculation:**
-- Peak value divided by standard deviation of correlation
-- Normalized to 0-1 range
+- Find second-best peak (excluding ±50 frames around the best)
+- Ratio = best_peak / second_best_peak
+- Map ratio to [0, 1]: ratio 1.0 → confidence 0.0, ratio 1.5+ → confidence 1.0
 - Values < 0.5 indicate potential misalignment
 
 ### 4. Drift Measurement

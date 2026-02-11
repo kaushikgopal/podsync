@@ -1,87 +1,98 @@
 # Dependencies
 
-## Core Libraries
+## Core Crates
 
-### librosa (>=0.10.0)
-**Purpose:** Audio loading, MFCC extraction, resampling
+### symphonia (0.5)
+**Purpose:** Audio decoding
 
-**Why this library:**
-- De facto standard for Python audio analysis
-- Handles all common audio formats via soundfile/audioread
-- Optimized MFCC implementation
-- Well-documented, actively maintained
+**Why this crate:**
+- Pure Rust audio decoder — no system dependencies
+- Supports MP3, WAV, FLAC, OGG/Vorbis, AIFF
+- Well-maintained, actively developed
+- Feature-gated codecs keep binary size reasonable
 
-**Key functions used:**
-- `librosa.load()` — Load and resample audio
-- `librosa.feature.mfcc()` — Extract MFCC features
-- `librosa.resample()` — Sample rate conversion
+**Key usage:**
+- Decode any supported audio format into raw PCM samples
+- Read sample rate, channel count, bit depth metadata
 
-### scipy (>=1.11.0)
-**Purpose:** Cross-correlation
+### rubato (1.0)
+**Purpose:** Sample rate conversion
 
-**Why this library:**
-- Standard scientific computing library
-- Optimized signal processing routines
-- `signal.correlate()` is fast and reliable
+**Why this crate:**
+- High-quality sinc interpolation resampler
+- Supports arbitrary ratios (e.g. 48kHz → 44.1kHz)
+- Pure Rust, no system dependencies
+- Configurable quality/speed tradeoff
 
-**Key functions used:**
-- `scipy.signal.correlate()` — Cross-correlation for offset detection
+**Key usage:**
+- Resample decoded audio to target 44.1kHz
+- Lower-quality resample to 16kHz for VAD processing
 
-### soundfile (>=0.12.0)
+### hound (3.5)
 **Purpose:** WAV file writing
 
-**Why this library:**
-- Direct libsndfile bindings
-- Supports 24-bit WAV output
-- Fast and reliable
-- Used by librosa under the hood
+**Why this crate:**
+- Simple, focused WAV reader/writer
+- Supports 24-bit PCM output
+- Minimal dependencies
+- Well-tested, stable
 
-**Key functions used:**
-- `sf.write()` — Write audio to WAV
+**Key usage:**
+- Write synced output as 24-bit 44.1kHz mono WAV
 
-### webrtcvad (>=2.0.10)
+### webrtc-vad (0.4)
 **Purpose:** Voice activity detection
 
-**Why this library:**
-- Google's production VAD from WebRTC
+**Why this crate:**
+- Wraps Google's production WebRTC VAD C library
 - Extremely fast (real-time capable)
 - Good accuracy for speech/non-speech classification
 - No ML model loading required
 
-**Alternative considered:** silero-vad (PyTorch-based, more accurate but heavier)
+**Alternative considered:** silero-vad (requires ONNX runtime, more accurate but heavier)
 
-**Key functions used:**
-- `Vad.is_speech()` — Frame-level speech detection
+**Key usage:**
+- Frame-level speech detection (30ms frames)
+- Requires specific sample rates (8/16/32/48kHz)
 
-### numpy (>=1.24.0)
-**Purpose:** Array operations
+### realfft (3.5)
+**Purpose:** FFT computation
 
-**Why this library:**
-- Required by all audio libraries
-- Efficient numerical operations
-- Standard for scientific Python
+**Why this crate:**
+- Optimized for real-valued inputs (audio data)
+- Built on rustfft — well-tested FFT implementation
+- Returns half-spectrum (exploiting conjugate symmetry)
 
-### click (>=8.1.0)
-**Purpose:** CLI framework
+**Key usage:**
+- STFT computation in the MFCC pipeline
+- FFT-based cross-correlation (convolution theorem)
 
-**Why this library:**
-- Clean, decorator-based API
-- Good help generation
-- Handles argument parsing edge cases
+### clap (4.5, derive)
+**Purpose:** CLI argument parsing
 
-## Package Management
+**Why this crate:**
+- De facto standard for Rust CLIs
+- Derive macros for declarative argument definitions
+- Generates help text automatically
+- Handles validation, defaults, and error messages
 
-### uv
-**Purpose:** Python package manager
+**Key usage:**
+- Parse `--master`, `--tracks`, `--sync-window`, `--output-suffix`
 
-**Why uv over pip:**
-- Isolated environments without manual virtualenv
-- Fast, reliable dependency resolution
-- Single binary installation
-- No "pip hell" or dependency conflicts
-- Rust-based, from Astral (ruff maintainers)
+## Dev Dependencies
 
-**Usage:**
-- `uv run podsync` — Run without explicit install
-- `uv sync` — Install dependencies
-- `uv tool install` — Global install
+### tempfile (3)
+**Purpose:** Temporary files for tests
+
+**Key usage:**
+- WAV roundtrip tests (write to temp file, read back, compare)
+
+## Build
+
+Standard cargo build. No system dependencies beyond a C compiler (needed by
+webrtc-vad to compile the Google WebRTC VAD C source).
+
+```sh
+make        # builds release binary at scripts/podsync
+make test   # runs cargo test
+```

@@ -24,36 +24,22 @@ See [references/ALGORITHM.md](references/ALGORITHM.md) for the full technical de
 
 ## Install
 
-Requires [uv](https://docs.astral.sh/uv/) (Python package manager).
+Requires Rust toolchain ([rustup](https://rustup.rs/)).
 
 ```sh
 git clone https://github.com/kaushikgopal/podsync.git
 cd podsync
-
-uv tool install scripts/src
+make
 ```
 
-This puts `podsync` on your PATH (typically at `~/.local/bin/podsync`).
-
-To update after pulling new changes:
-
-```sh
-uv tool install --reinstall scripts/src
-```
-
-### Run without installing
-
-```sh
-cd scripts/src
-uv run podsync --help
-```
+This builds a release binary at `scripts/podsync`. Add it to your PATH or invoke directly.
 
 ## Usage
 
 ```sh
-podsync \
+scripts/podsync \
   --master /path/to/episode-master.mp3 \
-  --tracks /path/to/host1-clean.wav /path/to/host2-clean.wav
+  --tracks /path/to/host1-clean.wav --tracks /path/to/host2-clean.wav
 ```
 
 ### Options
@@ -61,7 +47,7 @@ podsync \
 | Flag | Required | Default | Description |
 |------|----------|---------|-------------|
 | `--master` | Yes | — | Master/sync reference track (mp3, wav, aiff, flac, ogg) |
-| `--tracks` | Yes | — | Individual tracks to sync (specify multiple) |
+| `--tracks` | Yes | — | Individual tracks to sync (repeat for multiple) |
 | `--sync-window` | No | `120` | Seconds of speech to use for cross-correlation |
 | `--output-suffix` | No | `synced` | Suffix appended to output filenames |
 
@@ -73,10 +59,12 @@ Synced files are written to the same directory as the input tracks:
 - Sample rate: 44.1kHz, 24-bit WAV
 - Length: matches master track exactly
 
+A timestamped log file (`podsync-<epoch>.log`) is written next to the master file summarizing offsets, confidence, and drift for each track.
+
 ### Example
 
 ```
-$ podsync --master ep-master.mp3 --tracks ep-host1-clean.wav ep-host2-clean.wav
+$ podsync --master ep-master.mp3 --tracks ep-host1-clean.wav --tracks ep-host2-clean.wav
 
 Loading master: ep-master.mp3
   Duration: 58m32s at 44100Hz
@@ -118,25 +106,25 @@ To use as a skill, symlink or copy this repo into your project's skill directory
 ## Running tests
 
 ```sh
-cd scripts/src
-uv run pytest
+make test
 ```
 
-Integration tests with real audio files:
+Or directly:
 
 ```sh
-PODSYNC_TEST_DIR=/path/to/episode RUN_INTEGRATION=1 uv run pytest tests/test_integration.py
+cd scripts && cargo test
 ```
 
 ## Dependencies
 
-| Library | Purpose |
-|---------|---------|
-| [librosa](https://librosa.org/) | Audio loading, MFCC extraction, resampling |
-| [scipy](https://scipy.org/) | Cross-correlation via `signal.correlate` |
-| [soundfile](https://pysoundfile.readthedocs.io/) | WAV file writing |
-| [webrtcvad](https://github.com/wiseman/py-webrtcvad) | Voice activity detection |
-| [click](https://click.palletsprojects.com/) | CLI framework |
+| Crate | Purpose |
+|-------|---------|
+| [symphonia](https://github.com/pdeljanov/Symphonia) | Decode MP3, WAV, FLAC, OGG, AIFF |
+| [rubato](https://github.com/HEnquist/rubato) | Resample to 44.1kHz |
+| [hound](https://github.com/ruuda/hound) | Write 24-bit WAV |
+| [webrtc-vad](https://crates.io/crates/webrtc-vad) | Voice activity detection (Google WebRTC C lib) |
+| [realfft](https://github.com/HEnquist/realfft) | FFT for MFCC extraction and cross-correlation |
+| [clap](https://github.com/clap-rs/clap) | CLI argument parsing |
 
 See [references/DEPENDENCIES.md](references/DEPENDENCIES.md) for detailed rationale.
 
