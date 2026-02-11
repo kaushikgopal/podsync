@@ -15,6 +15,7 @@ use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::time::SystemTime;
 
 use clap::Parser;
 
@@ -160,20 +161,28 @@ fn format_duration(seconds: f64) -> String {
 
 /// Write a mini log file summarizing the sync run.
 ///
-/// Placed next to the master file as `podsync.log`. Each run overwrites the
-/// previous log — the file reflects the most recent run only.
+/// Placed next to the master file as `podsync-<timestamp>.log`. Each run
+/// produces a unique file so previous logs are preserved.
 fn write_log_file(
     master_path: &Path,
     master_duration: f64,
     master_sr: u32,
     results: &[TrackResult],
 ) {
-    let log_path = master_path.parent().unwrap_or(Path::new(".")).join("podsync.log");
+    // --- Build timestamp for filename and header ---------------------------
+    // Uses Unix epoch seconds — no chrono dependency needed for a log name.
+    let timestamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let log_filename = format!("podsync-{}.log", timestamp);
+    let log_path = master_path.parent().unwrap_or(Path::new(".")).join(log_filename);
 
     let mut log = String::new();
 
     // --- Header ------------------------------------------------------------
-    writeln!(log, "podsync run").unwrap();
+    writeln!(log, "podsync run ({})", timestamp).unwrap();
     writeln!(log, "master: {} ({}, {}Hz)",
         master_path.file_name().unwrap_or_default().to_string_lossy(),
         format_duration(master_duration),
