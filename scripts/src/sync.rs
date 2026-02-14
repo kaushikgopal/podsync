@@ -314,15 +314,14 @@ pub fn compute_drift(
     let track_end_start = track_end_start as usize;
     let track_end = &track[track_end_start..track_end_start + end_samples];
 
-    // Correlate the end regions. Use a smaller correlation window (half the
-    // search window, capped at 60s) because we're searching a narrower range
-    // — we already know approximately where the track should be.
+    // Use half the end window (capped at 60s, floored at 1s) for drift
+    // correlation — we already know approximately where the track should be.
     let (end_offset, _confidence) = find_offset(
         master_end,
         track_end,
         sr,
         end_window,
-        end_window.min(60.0) / 2.0_f64.max(1.0),
+        (end_window.min(60.0) / 2.0).max(1.0),
     );
 
     // end_offset should be ~0 if no drift (since we positioned track_end
