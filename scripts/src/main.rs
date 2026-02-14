@@ -78,7 +78,7 @@ struct Cli {
 
 /// Result of processing a single track.
 ///
-/// On success: audio, offset, drift, confidence, and output_path are populated.
+/// On success: audio, offset, drift, and confidence are populated.
 /// On failure: error is populated, everything else is None.
 struct TrackResult {
     /// Original path to this track's audio file.
@@ -96,9 +96,6 @@ struct TrackResult {
     /// Confidence of the cross-correlation match (0.0 = ambiguous, 1.0 = clear).
     confidence: Option<f64>,
 
-    /// Path where the synced output was written.
-    output_path: Option<PathBuf>,
-
     /// Error message if processing failed at any stage.
     error: Option<String>,
 }
@@ -112,11 +109,36 @@ impl TrackResult {
             offset: None,
             drift: None,
             confidence: None,
-            output_path: None,
             error: None,
         }
     }
+}
 
+/// Lightweight summary of a track's sync result, without the audio buffer.
+///
+/// Created after writing the output file so the audio buffer can be freed.
+/// Used for the summary table and log file.
+struct TrackSummary {
+    /// Original path to this track's audio file.
+    path: PathBuf,
+
+    /// Time offset in seconds.
+    offset: Option<f64>,
+
+    /// Confidence of the cross-correlation match.
+    confidence: Option<f64>,
+
+    /// Clock drift in seconds.
+    drift: Option<f64>,
+
+    /// Path where the synced output was written.
+    output_path: Option<PathBuf>,
+
+    /// Error message if processing or writing failed.
+    error: Option<String>,
+}
+
+impl TrackSummary {
     /// A track is successful if it completed without error and produced output.
     fn success(&self) -> bool {
         self.error.is_none() && self.output_path.is_some()
@@ -166,7 +188,7 @@ fn write_log_file(
     master_path: &Path,
     master_duration: f64,
     master_sr: u32,
-    results: &[TrackResult],
+    results: &[TrackSummary],
 ) {
     // --- Build timestamp for filename and header ---------------------------
     // Uses Unix epoch seconds — no chrono dependency needed for a log name.
@@ -378,56 +400,64 @@ fn main() {
     let master_duration = master_audio.len() as f64 / master_sr as f64;
     eprintln!("  Duration: {} at {}Hz", format_duration(master_duration), master_sr);
 
-    // --- Process each track ------------------------------------------------
-    let mut results: Vec<TrackResult> = Vec::with_capacity(track_paths.len());
+    // --- Process and write each track --------------------------------------
+    // Process each track, write its output immediately, then drop the audio
+    // buffer. This keeps peak memory at O(1) audio buffers instead of O(N).
+    let max_length = master_audio.len();
+    let mut summaries: Vec<TrackSummary> = Vec::with_capacity(track_paths.len());
 
     for track_path in track_paths {
         let result = process_track(&master_audio, master_sr, track_path, cli.sync_window);
-        results.push(result);
-    }
 
-    // --- Write output files ------------------------------------------------
-    // All output files match the master track's length so they can be dropped
-    // into a DAW at position 0:00.
-    let max_length = master_audio.len();
-
-    eprintln!("\nWriting output files...");
-
-    for result in &mut results {
-        if result.error.is_some() {
-            // Track failed during processing — skip writing.
-            continue;
+        let summary = if result.error.is_some() {
+            // Track failed during processing — nothing to write.
+            TrackSummary {
+                path: result.path,
+                offset: None,
+                confidence: None,
+                drift: None,
+                output_path: None,
+                error: result.error,
+            }
         } else {
-            // Track processed successfully — write aligned output.
-        }
+            let offset_samples = seconds_to_samples(result.offset.unwrap(), master_sr);
 
-        let offset_samples = seconds_to_samples(result.offset.unwrap(), master_sr);
+            let (output_path, write_error) = match apply_offset(result.audio.as_ref().unwrap(), offset_samples, max_length) {
+                Ok(padded) => {
+                    let path = result.path.parent().unwrap_or(Path::new(".")).join(
+                        format!("{}-{}.wav",
+                            result.path.file_stem().unwrap_or_default().to_string_lossy(),
+                            cli.output_suffix)
+                    );
+                    match write_audio(&path, &padded, master_sr) {
+                        Ok(()) => {
+                            eprintln!("  Writing {}", path.file_name().unwrap_or_default().to_string_lossy());
+                            (Some(path), None)
+                        }
+                        Err(e) => {
+                            eprintln!("  ERROR writing {}: {}", path.file_name().unwrap_or_default().to_string_lossy(), e);
+                            (None, Some(e.to_string()))
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("  ERROR writing {}: {}", result.path.file_name().unwrap_or_default().to_string_lossy(), e);
+                    (None, Some(e.to_string()))
+                }
+            };
 
-        let padded = match apply_offset(result.audio.as_ref().unwrap(), offset_samples, max_length) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("  ERROR writing {}: {}", result.path.file_name().unwrap_or_default().to_string_lossy(), e);
-                result.error = Some(e.to_string());
-                result.output_path = None;
-                continue;
+            TrackSummary {
+                path: result.path,
+                offset: result.offset,
+                confidence: result.confidence,
+                drift: result.drift,
+                output_path,
+                error: write_error,
             }
         };
 
-        let output_path = result.path.parent().unwrap_or(Path::new(".")).join(
-            format!("{}-{}.wav", result.path.file_stem().unwrap_or_default().to_string_lossy(), cli.output_suffix)
-        );
-
-        match write_audio(&output_path, &padded, master_sr) {
-            Ok(()) => {
-                result.output_path = Some(output_path.clone());
-                eprintln!("  Writing {}", output_path.file_name().unwrap_or_default().to_string_lossy());
-            }
-            Err(e) => {
-                eprintln!("  ERROR writing {}: {}", output_path.file_name().unwrap_or_default().to_string_lossy(), e);
-                result.error = Some(e.to_string());
-                result.output_path = None;
-            }
-        }
+        // Audio buffer from `result` is dropped here.
+        summaries.push(summary);
     }
 
     // --- Summary -----------------------------------------------------------
@@ -435,26 +465,26 @@ fn main() {
     eprintln!("{}", "=".repeat(60));
     eprintln!("Summary:");
 
-    let success_count = results.iter().filter(|r| r.success()).count();
-    let fail_count = results.len() - success_count;
+    let success_count = summaries.iter().filter(|r| r.success()).count();
+    let fail_count = summaries.len() - success_count;
 
-    for result in &results {
-        if result.success() {
-            let drift_str = match result.drift {
+    for summary in &summaries {
+        if summary.success() {
+            let drift_str = match summary.drift {
                 Some(d) => format!("drift: {:.2}s", d),
                 None => "drift: N/A".to_string(),
             };
             eprintln!(
                 "  {:<40} offset: {}   {}   ✓",
-                result.output_path.as_ref().unwrap().file_name().unwrap_or_default().to_string_lossy(),
-                format_time(result.offset.unwrap()),
+                summary.output_path.as_ref().unwrap().file_name().unwrap_or_default().to_string_lossy(),
+                format_time(summary.offset.unwrap()),
                 drift_str,
             );
         } else {
             eprintln!(
                 "  {:<40} FAILED: {}",
-                result.path.file_name().unwrap_or_default().to_string_lossy(),
-                result.error.as_deref().unwrap_or("unknown error"),
+                summary.path.file_name().unwrap_or_default().to_string_lossy(),
+                summary.error.as_deref().unwrap_or("unknown error"),
             );
         }
     }
@@ -462,7 +492,7 @@ fn main() {
     eprintln!("{}", "=".repeat(60));
 
     // --- Write log file ----------------------------------------------------
-    write_log_file(master_path, master_duration, master_sr, &results);
+    write_log_file(master_path, master_duration, master_sr, &summaries);
 
     if fail_count > 0 {
         eprintln!("\n{} succeeded, {} failed", success_count, fail_count);
@@ -556,20 +586,42 @@ mod tests {
         assert_eq!(cli.output_suffix, DEFAULT_OUTPUT_SUFFIX);
     }
 
-    // --- TrackResult -------------------------------------------------------
+    // --- TrackSummary ------------------------------------------------------
 
     #[test]
-    fn test_track_result_success() {
-        let mut result = TrackResult::new(PathBuf::from("track.wav"));
-        // Initially not successful — no output_path.
-        assert!(!result.success());
+    fn test_track_summary_success() {
+        let summary = TrackSummary {
+            path: PathBuf::from("track.wav"),
+            offset: Some(1.0),
+            confidence: Some(0.9),
+            drift: None,
+            output_path: Some(PathBuf::from("track-synced.wav")),
+            error: None,
+        };
+        assert!(summary.success());
 
-        // After setting output_path, it's successful.
-        result.output_path = Some(PathBuf::from("track-synced.wav"));
-        assert!(result.success());
+        // Without output_path, not successful.
+        let summary_no_output = TrackSummary {
+            path: PathBuf::from("track.wav"),
+            offset: Some(1.0),
+            confidence: Some(0.9),
+            drift: None,
+            output_path: None,
+            error: None,
+        };
+        assert!(!summary_no_output.success());
+    }
 
-        // If error is set, it's no longer successful even with output_path.
-        result.error = Some("something went wrong".to_string());
-        assert!(!result.success());
+    #[test]
+    fn test_track_summary_failure() {
+        let summary = TrackSummary {
+            path: PathBuf::from("track.wav"),
+            offset: None,
+            confidence: None,
+            drift: None,
+            output_path: None,
+            error: Some("something went wrong".to_string()),
+        };
+        assert!(!summary.success());
     }
 }
