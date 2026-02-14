@@ -223,13 +223,11 @@ pub fn find_first_speech_segment(
         dur_b.partial_cmp(&dur_a).unwrap()
     });
 
-    for &(start, end) in &regions_by_length {
-        let duration = end - start;
-        if duration >= min_duration {
+    if let Some(&(start, end)) = regions_by_length.first() {
+        if end - start >= min_duration {
             return Some((start, end));
-        } else {
-            // This region is too short — try the next one.
         }
+        // Longest region is too short — fall through to Tier 2.
     }
 
     // ------------------------------------------------------------------
