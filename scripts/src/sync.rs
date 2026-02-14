@@ -556,4 +556,113 @@ mod tests {
             drift.unwrap()
         );
     }
+
+    #[test]
+    fn test_finds_negative_offset() {
+        // When track content appears LATER in the track than in the master
+        // (track started recording early), find_offset should return negative.
+        //
+        // Setup: master has a rich signal at the very start.
+        // Track has 2 seconds of silence, then the same rich signal.
+        // Expected: offset ≈ -2.0s (track needs to shift left).
+        let sr: u32 = 44100;
+        let content_duration = 10.0;
+        let offset_seconds: f64 = 2.0;
+
+        let content = make_rich_signal(content_duration, sr, 42);
+
+        // Master: content starts at the beginning.
+        let master = content.clone();
+
+        // Track: 2s silence then content.
+        let silence_samples = (offset_seconds * sr as f64) as usize;
+        let mut track = vec![0.0f32; silence_samples];
+        track.extend_from_slice(&content);
+
+        let search_window = content_duration as f64 + offset_seconds + 3.0;
+        let correlation_window = content_duration as f64;
+
+        let (found_offset, confidence) = find_offset(
+            &master,
+            &track,
+            sr,
+            search_window,
+            correlation_window,
+        );
+
+        assert!(
+            found_offset < 0.0,
+            "offset should be negative, got {}s",
+            found_offset
+        );
+        assert!(
+            (found_offset - (-offset_seconds)).abs() < 0.5,
+            "offset should be ~-{}s, got {}s",
+            offset_seconds, found_offset
+        );
+        assert!(confidence > 0.3, "confidence should be > 0.3, got {}", confidence);
+    }
+
+    #[test]
+    fn test_low_confidence_for_uncorrelated_signals() {
+        // Two signals with independent spectral content should produce low
+        // confidence. We use pseudo-random noise with different seeds —
+        // pure noise has no shared temporal structure, so MFCC cross-
+        // correlation should not find a distinctive peak.
+        let sr: u32 = 44100;
+        let master_duration = 15.0;
+        let track_duration = 5.0;
+        let master_samples = (sr as f64 * master_duration) as usize;
+        let track_samples = (sr as f64 * track_duration) as usize;
+
+        // Generate noise with two different seeds.
+        let mut rng_a: u64 = 12345;
+        let master: Vec<f32> = (0..master_samples)
+            .map(|_| {
+                rng_a = rng_a.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (rng_a >> 33) as f32 / u32::MAX as f32 - 0.5
+            })
+            .collect();
+
+        let mut rng_b: u64 = 67890;
+        let track: Vec<f32> = (0..track_samples)
+            .map(|_| {
+                rng_b = rng_b.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (rng_b >> 33) as f32 / u32::MAX as f32 - 0.5
+            })
+            .collect();
+
+        let (_offset, confidence) = find_offset(
+            &master,
+            &track,
+            sr,
+            master_duration,
+            track_duration,
+        );
+
+        assert!(
+            confidence < 0.5,
+            "confidence should be low for uncorrelated noise, got {}",
+            confidence
+        );
+    }
+
+    #[test]
+    fn test_zero_confidence_for_silence() {
+        // Correlating silence against silence should produce near-zero confidence
+        // (after fix 1D which handles the degenerate case).
+        let sr: u32 = 44100;
+        let duration = 5.0;
+        let n_samples = (sr as f64 * duration) as usize;
+
+        let silence = vec![0.0f32; n_samples];
+
+        let (_offset, confidence) = find_offset(&silence, &silence, sr, duration, duration);
+
+        assert!(
+            confidence < 0.1,
+            "confidence should be ~0.0 for silence, got {}",
+            confidence
+        );
+    }
 }
