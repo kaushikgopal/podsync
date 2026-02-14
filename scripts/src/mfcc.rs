@@ -99,27 +99,29 @@ fn stft_power(audio: &[f32], n_fft: usize, hop_length: usize) -> Vec<Vec<f64>> {
     let n_frames = (padded_len - n_fft) / hop_length + 1;
     let mut power_frames = Vec::with_capacity(n_frames);
 
+    // Pre-allocate buffers outside the loop to avoid ~150K allocations for a
+    // typical 10-minute window (~51K frames * 3 buffers per frame).
+    let mut windowed_frame = fft.make_input_vec();
+    let mut spectrum = fft.make_output_vec();
+    let mut power = vec![0.0f64; n_bins];
+
     for frame_idx in 0..n_frames {
         let start = frame_idx * hop_length;
 
         // Extract frame and apply Hann window.
-        let mut windowed_frame = fft.make_input_vec();
         for i in 0..n_fft {
             windowed_frame[i] = padded[start + i] * window[i];
         }
 
         // Forward FFT.
-        let mut spectrum = fft.make_output_vec();
         fft.process(&mut windowed_frame, &mut spectrum).unwrap();
 
         // Compute power spectrum: |X(f)|^2 = re^2 + im^2
-        let mut power = Vec::with_capacity(n_bins);
-        for complex_val in &spectrum {
-            let magnitude_squared = complex_val.re * complex_val.re + complex_val.im * complex_val.im;
-            power.push(magnitude_squared);
+        for (k, complex_val) in spectrum.iter().enumerate().take(n_bins) {
+            power[k] = complex_val.re * complex_val.re + complex_val.im * complex_val.im;
         }
 
-        power_frames.push(power);
+        power_frames.push(power.clone());
     }
 
     power_frames
