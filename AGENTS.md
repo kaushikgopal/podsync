@@ -86,6 +86,7 @@ Core modules: `sync.rs` (offset/drift), `vad.rs` (speech detection),
 | n_mfcc | 20 | MFCC coefficients |
 | hop_length | 512 | STFT hop (~11.6ms at 44.1kHz) |
 | VAD aggressiveness | 2 | WebRTC VAD level (0–3) |
+| DRIFT_END_WINDOW_S | 120s | window at recording end for drift measurement |
 
 ## Editing guidelines
 
@@ -101,8 +102,9 @@ Core modules: `sync.rs` (offset/drift), `vad.rs` (speech detection),
 
 ## Failure modes to know about
 
-- **"Insufficient speech detected"** — VAD couldn't find 30s of continuous speech
-  in the first 10 minutes of a track.
+- **"No speech detected"** — VAD found no speech at all in the first 10 minutes.
+  The VAD uses a three-tier fallback (single region >=30s, longest region >=10s,
+  accumulated nearby regions), so this only triggers when there is zero detected speech.
 - **Low confidence (<0.5)** — cross-correlation peak wasn't distinctive. File still
   written, but offset may be wrong.
 - **Drift > 1s** — clock rate mismatch between devices. Reported but not corrected.

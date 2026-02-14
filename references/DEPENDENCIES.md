@@ -28,6 +28,17 @@
 - Resample decoded audio to target 44.1kHz
 - Lower-quality resample to 16kHz for VAD processing
 
+### audioadapter-buffers (2.0)
+**Purpose:** Buffer adapters for rubato resampling
+
+**Why this crate:**
+- Required by rubato 1.0 for passing audio data to the resampler
+- Provides `InterleavedSlice` for zero-copy views over audio buffers
+- Separates buffer management from the resampling algorithm
+
+**Key usage:**
+- Wrap `&[f64]` input and `&mut [f64]` output for rubato's `process_all_into_buffer`
+
 ### hound (3.5)
 **Purpose:** WAV file writing
 

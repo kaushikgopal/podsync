@@ -69,6 +69,12 @@ podsync \
 | `--sync-window` | No | 120 | Seconds of speech to use for correlation |
 | `--output-suffix` | No | `synced` | Suffix for output files |
 
+**Internal parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `DRIFT_END_WINDOW_S` | 120s | Window at recording end used for drift measurement |
+
 ### Output
 
 - Files written to same directory as input with `-{suffix}.wav` appended
@@ -103,8 +109,11 @@ Summary:
 
 2. VOICE ACTIVITY DETECTION (on individual track)
    ├── Run VAD to find speech regions
-   ├── Find first segment with ≥30s continuous speech
-   └── If <30s total speech found → FAIL track with message
+   ├── Select best segment via three-tier fallback:
+   │   ├── Tier 1: single region ≥30s (preferred)
+   │   ├── Tier 2: longest single region ≥10s
+   │   └── Tier 3: accumulated nearby regions ≥30s
+   └── If no speech detected at all → FAIL track with message
 
 3. EXTRACT FEATURES
    ├── Extract MFCCs from individual track's speech region (first 2 min of speech)
@@ -161,7 +170,7 @@ All synced tracks are trimmed/padded to match the master track length. This ensu
 
 | Condition | Behavior |
 |-----------|----------|
-| Insufficient speech (<30s in first 10 min) | Skip track, continue others, report failure with reason |
+| No speech detected (in first 10 min) | Skip track, continue others, report failure with reason |
 | Low correlation confidence (<0.5) | Warn but still output the file |
 | Unsupported audio format | Fail with clear error message |
 

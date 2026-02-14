@@ -304,8 +304,7 @@ fn process_track(
         }
         None => {
             result.error = Some(format!(
-                "Insufficient speech detected (< {:.0}s in first {:.0} min)",
-                PREFERRED_SPEECH_DURATION_S,
+                "No speech detected in first {:.0} min",
                 VAD_SEARCH_LIMIT_S / 60.0,
             ));
             eprintln!(" FAILED");

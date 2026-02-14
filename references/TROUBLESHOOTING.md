@@ -2,9 +2,11 @@
 
 ## Common Issues
 
-### "Insufficient speech detected"
+### "No speech detected"
 
-**Cause:** VAD couldn't find 30+ seconds of continuous speech in the first 10 minutes.
+**Cause:** VAD found no speech at all in the first 10 minutes. Note that the VAD
+uses a three-tier fallback (single region >=30s, longest region >=10s, accumulated
+nearby regions) so this only triggers when there is truly zero detected speech.
 
 **Solutions:**
 1. Check if the track is mostly silence
@@ -34,6 +36,15 @@
 1. For most editing, 1s drift over 1 hour is acceptable
 2. If critical, manually adjust in DAW
 3. Consider time-stretching in post (not handled by this tool)
+
+### Drift shows "N/A"
+
+**Cause:** The recording is shorter than 2x `DRIFT_END_WINDOW_S` (default: under
+4 minutes with `DRIFT_END_WINDOW_S=120s`). There isn't enough audio past the
+midpoint to run a second correlation for drift measurement.
+
+**This is expected behavior.** Drift is only meaningful for longer recordings where
+clock differences accumulate over time. Short recordings won't have noticeable drift.
 
 ### "Failed to load" error
 
