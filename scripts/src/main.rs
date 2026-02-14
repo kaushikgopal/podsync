@@ -243,8 +243,7 @@ fn write_log_file(
 /// Returns a TrackResult containing the loaded audio and all computed metadata.
 /// The caller is responsible for writing the output file.
 ///
-/// This function prints progress to stdout as it goes, matching the Python
-/// CLI's output format.
+/// This function prints progress to stderr as it goes.
 fn process_track(
     master_audio: &[f32],
     master_sr: u32,
