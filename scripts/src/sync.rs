@@ -144,6 +144,48 @@ fn correlate_full(a: &[f64], b: &[f64], planner: &mut RealFftPlanner<f64>) -> Ve
 // Offset detection
 // ---------------------------------------------------------------------------
 
+/// Pre-extract MFCCs from the master's search window.
+///
+/// Call this once before the track loop, then pass the result to
+/// `find_offset_with_mfcc` for each track. This avoids re-extracting the
+/// same master MFCCs for every track.
+pub fn extract_master_mfcc(
+    master: &[f32],
+    sr: u32,
+    search_window: f64,
+) -> Vec<Vec<f64>> {
+    let master_samples = seconds_to_samples(search_window, sr) as usize;
+    let master_limited = if master.len() > master_samples {
+        &master[..master_samples]
+    } else {
+        master
+    };
+    extract_mfcc(master_limited, sr, N_MFCC_COEFFICIENTS, HOP_LENGTH)
+}
+
+/// Find offset using precomputed master MFCCs.
+///
+/// Same algorithm as `find_offset`, but skips master MFCC extraction.
+pub fn find_offset_with_mfcc(
+    master_mfcc: &[Vec<f64>],
+    track: &[f32],
+    sr: u32,
+    correlation_window: f64,
+) -> (f64, f64) {
+    let hop_length = HOP_LENGTH;
+
+    let track_samples = seconds_to_samples(correlation_window, sr) as usize;
+    let track_limited = if track.len() > track_samples {
+        &track[..track_samples]
+    } else {
+        track
+    };
+
+    let mfcc_track = extract_mfcc(track_limited, sr, N_MFCC_COEFFICIENTS, hop_length);
+
+    correlate_mfcc_pair(master_mfcc, &mfcc_track, sr, hop_length)
+}
+
 /// Find the time offset of *track* relative to *master* using MFCC cross-correlation.
 ///
 /// Returns (offset_seconds, confidence) where:
@@ -178,6 +220,18 @@ pub fn find_offset(
     let mfcc_master = extract_mfcc(master_limited, sr, N_MFCC_COEFFICIENTS, hop_length);
     let mfcc_track = extract_mfcc(track_limited, sr, N_MFCC_COEFFICIENTS, hop_length);
 
+    correlate_mfcc_pair(&mfcc_master, &mfcc_track, sr, hop_length)
+}
+
+/// Cross-correlate two sets of MFCCs and return (offset_seconds, confidence).
+///
+/// Shared implementation for `find_offset` and `find_offset_with_mfcc`.
+fn correlate_mfcc_pair(
+    mfcc_master: &[Vec<f64>],
+    mfcc_track: &[Vec<f64>],
+    sr: u32,
+    hop_length: usize,
+) -> (f64, f64) {
     let n_coeffs = mfcc_master.len();
 
     // --- Cross-correlate each coefficient independently, then sum ----------

@@ -23,7 +23,7 @@ use audio::{
     TARGET_SAMPLE_RATE,
     apply_offset, load_audio, seconds_to_samples, write_audio,
 };
-use sync::{LOW_CONFIDENCE_THRESHOLD, compute_drift, find_offset};
+use sync::{LOW_CONFIDENCE_THRESHOLD, compute_drift, extract_master_mfcc, find_offset_with_mfcc};
 use vad::{PREFERRED_SPEECH_DURATION_S, VAD_SEARCH_LIMIT_S, find_first_speech_segment};
 
 // ---------------------------------------------------------------------------
@@ -267,6 +267,7 @@ fn write_log_file(
 ///
 /// This function prints progress to stderr as it goes.
 fn process_track(
+    master_mfcc: &[Vec<f64>],
     master_audio: &[f32],
     master_sr: u32,
     track_path: &Path,
@@ -324,11 +325,10 @@ fn process_track(
 
     // --- Find offset -------------------------------------------------------
     eprint!("  Correlating against master...");
-    let (offset, confidence) = find_offset(
-        master_audio,
+    let (offset, confidence) = find_offset_with_mfcc(
+        master_mfcc,
         track_speech,
         track_sr,
-        VAD_SEARCH_LIMIT_S,
         sync_window,
     );
 
@@ -400,6 +400,13 @@ fn main() {
     let master_duration = master_audio.len() as f64 / master_sr as f64;
     eprintln!("  Duration: {} at {}Hz", format_duration(master_duration), master_sr);
 
+    // --- Pre-extract master MFCCs ------------------------------------------
+    // Extract once before the track loop so every track reuses the same
+    // master features instead of re-computing them.
+    eprint!("  Extracting master MFCCs...");
+    let master_mfcc = extract_master_mfcc(&master_audio, master_sr, VAD_SEARCH_LIMIT_S);
+    eprintln!(" done ({} coefficients × {} frames)", master_mfcc.len(), master_mfcc[0].len());
+
     // --- Process and write each track --------------------------------------
     // Process each track, write its output immediately, then drop the audio
     // buffer. This keeps peak memory at O(1) audio buffers instead of O(N).
@@ -407,7 +414,7 @@ fn main() {
     let mut summaries: Vec<TrackSummary> = Vec::with_capacity(track_paths.len());
 
     for track_path in track_paths {
-        let result = process_track(&master_audio, master_sr, track_path, cli.sync_window);
+        let result = process_track(&master_mfcc, &master_audio, master_sr, track_path, cli.sync_window);
 
         let summary = if result.error.is_some() {
             // Track failed during processing — nothing to write.
