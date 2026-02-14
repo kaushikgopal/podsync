@@ -468,4 +468,96 @@ mod tests {
         let merged = merge_regions(&[], 0.3);
         assert!(merged.is_empty());
     }
+
+    #[test]
+    fn test_tier2_uses_longest_region_when_below_min_duration() {
+        // No single region meets min_duration (30s), but the longest is >= 10s.
+        // Tier 2 should return the longest region.
+        //
+        // Layout: 1s silence, 15s speech, 5s silence, 3s speech, 1s silence
+        // min_duration=30s, so Tier 1 fails. Longest region is 15s (>= 10s),
+        // so Tier 2 returns it.
+        let sr: u32 = 16000;
+
+        let silence_1s: Vec<f32> = vec![0.0; sr as usize];
+        let silence_5s: Vec<f32> = vec![0.0; sr as usize * 5];
+        let speech_15s = make_noise(sr, 15.0, 42);
+        let speech_3s = make_noise(sr, 3.0, 99);
+
+        let mut audio = Vec::new();
+        audio.extend_from_slice(&silence_1s);   // 0-1s: silence
+        audio.extend_from_slice(&speech_15s);   // 1-16s: speech
+        audio.extend_from_slice(&silence_5s);   // 16-21s: silence (large gap)
+        audio.extend_from_slice(&speech_3s);    // 21-24s: speech
+        audio.extend_from_slice(&silence_1s);   // 24-25s: silence
+
+        let result = find_first_speech_segment(&audio, sr, 30.0, 600.0);
+
+        assert!(result.is_some(), "Tier 2 should find a segment");
+        let (start, end) = result.unwrap();
+        let duration = end - start;
+
+        // Should be the 15s region (Tier 2), not an accumulation.
+        assert!(
+            duration >= 10.0,
+            "segment should be >= 10s (Tier 2), got {}s",
+            duration
+        );
+        assert!(
+            duration < 30.0,
+            "segment should be < 30s (Tier 1 threshold), got {}s",
+            duration
+        );
+        assert!(
+            start >= 0.5 && start <= 2.0,
+            "segment should start around 1s, got {}s",
+            start
+        );
+    }
+
+    #[test]
+    fn test_tier3_accumulates_nearby_regions() {
+        // No single region >= 10s, but several small regions within 2s gaps
+        // accumulate to >= min_duration. Tier 3 should return the merged span.
+        //
+        // Layout: multiple 5s speech blocks separated by 1s silence gaps.
+        // Each block is < 10s (Tier 2 fails). Total speech across blocks
+        // exceeds min_duration=15s with gaps < 2s (ACCUMULATION_GAP_LIMIT_S).
+        let sr: u32 = 16000;
+
+        let silence_1s: Vec<f32> = vec![0.0; sr as usize];
+        let gap_1_5s: Vec<f32> = vec![0.0; (sr as f32 * 1.5) as usize];
+
+        let mut audio = Vec::new();
+        audio.extend_from_slice(&silence_1s);                       // 0-1s: silence
+        audio.extend_from_slice(&make_noise(sr, 5.0, 10));         // 1-6s: speech
+        audio.extend_from_slice(&gap_1_5s);                         // 6-7.5s: gap (< 2s)
+        audio.extend_from_slice(&make_noise(sr, 5.0, 20));         // 7.5-12.5s: speech
+        audio.extend_from_slice(&gap_1_5s);                         // 12.5-14s: gap (< 2s)
+        audio.extend_from_slice(&make_noise(sr, 5.0, 30));         // 14-19s: speech
+        audio.extend_from_slice(&gap_1_5s);                         // 19-20.5s: gap (< 2s)
+        audio.extend_from_slice(&make_noise(sr, 5.0, 40));         // 20.5-25.5s: speech
+        audio.extend_from_slice(&silence_1s);                       // 25.5-26.5s: silence
+
+        // min_duration=15s: no single region is >= 10s, so Tier 1 and 2 fail.
+        // Tier 3 accumulates the nearby blocks.
+        let result = find_first_speech_segment(&audio, sr, 15.0, 600.0);
+
+        assert!(result.is_some(), "Tier 3 should find a segment");
+        let (start, end) = result.unwrap();
+        let span = end - start;
+
+        // The accumulated span should cover from the first speech region
+        // through enough regions to reach min_duration.
+        assert!(
+            start >= 0.5 && start <= 2.0,
+            "accumulated segment should start around 1s, got {}s",
+            start
+        );
+        assert!(
+            span >= 10.0,
+            "accumulated span should cover multiple regions, got {}s",
+            span
+        );
+    }
 }
