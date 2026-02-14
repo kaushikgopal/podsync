@@ -228,9 +228,9 @@ pub fn find_first_speech_segment(
     // ------------------------------------------------------------------
     let mut regions_by_length = regions.clone();
     regions_by_length.sort_by(|a, b| {
-        let dur_a = b.1 - b.0;
-        let dur_b = a.1 - a.0;
-        dur_a.partial_cmp(&dur_b).unwrap()
+        let dur_a = a.1 - a.0;
+        let dur_b = b.1 - b.0;
+        dur_b.partial_cmp(&dur_a).unwrap()
     });
 
     for &(start, end) in &regions_by_length {
