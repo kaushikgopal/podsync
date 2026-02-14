@@ -228,7 +228,7 @@ pub fn find_offset(
     let (peak_idx, peak_value) = correlation
         .iter()
         .enumerate()
-        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .max_by(|(_, a), (_, b)| a.total_cmp(b))
         .unwrap();
 
     // --- Compute confidence ------------------------------------------------
