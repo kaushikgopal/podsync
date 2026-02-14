@@ -65,13 +65,12 @@ pub const LOW_CONFIDENCE_THRESHOLD: f64 = 0.5;
 /// Implementation: FFT-based correlation via the convolution theorem.
 ///   correlate(a, b) = IFFT(FFT(a) * conj(FFT(b)))
 /// padded to the next power of two for FFT efficiency.
-fn correlate_full(a: &[f64], b: &[f64]) -> Vec<f64> {
+fn correlate_full(a: &[f64], b: &[f64], planner: &mut RealFftPlanner<f64>) -> Vec<f64> {
     let output_len = a.len() + b.len() - 1;
 
     // Pad to next power of two for FFT efficiency.
     let fft_len = output_len.next_power_of_two();
 
-    let mut planner = RealFftPlanner::<f64>::new();
     let forward = planner.plan_fft_forward(fft_len);
     let inverse = planner.plan_fft_inverse(fft_len);
 
@@ -185,6 +184,7 @@ pub fn find_offset(
     // Correlating per-coefficient preserves spectral discrimination. If we
     // flattened first, high-energy coefficients would dominate and subtle
     // spectral differences (like distinguishing two speakers) would be lost.
+    let mut planner = RealFftPlanner::<f64>::new();
     let mut correlation: Option<Vec<f64>> = None;
 
     for i in 0..n_coeffs {
@@ -208,7 +208,7 @@ pub fn find_offset(
         };
         let t_norm: Vec<f64> = t.iter().map(|&v| (v - t_mean) / (t_std + EPSILON)).collect();
 
-        let c = correlate_full(&m_norm, &t_norm);
+        let c = correlate_full(&m_norm, &t_norm, &mut planner);
 
         match &mut correlation {
             None => {
@@ -390,7 +390,8 @@ mod tests {
         let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let b = vec![2.0, 3.0, 1.0];
 
-        let fft_result = correlate_full(&a, &b);
+        let mut planner = RealFftPlanner::<f64>::new();
+        let fft_result = correlate_full(&a, &b, &mut planner);
         let naive_result = naive_correlate_full(&a, &b);
 
         assert_eq!(fft_result.len(), naive_result.len());
