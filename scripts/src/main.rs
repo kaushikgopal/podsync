@@ -318,7 +318,7 @@ fn process_track(
     // track's offset is: (where speech was found in master) - speech_start.
     let total_offset = offset - speech_start;
 
-    result.audio = Some(track_audio.clone());
+    result.audio = Some(track_audio);
     result.offset = Some(total_offset);
     result.confidence = Some(confidence);
     eprintln!(" offset: {} (confidence: {:.2})", format_time(total_offset), confidence);
