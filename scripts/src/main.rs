@@ -333,7 +333,7 @@ fn process_track(
     eprint!("  Measuring drift...");
     let drift = compute_drift(
         master_audio,
-        &result.audio.as_ref().unwrap(),
+        result.audio.as_ref().unwrap(),
         master_sr,
         total_offset,
         DRIFT_END_WINDOW_S,

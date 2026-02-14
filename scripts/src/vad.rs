@@ -118,15 +118,7 @@ pub fn detect_speech_regions(audio: &[f32], sr: u32) -> Vec<Region> {
     while position + frame_size <= audio_int16.len() {
         let frame = &audio_int16[position..position + frame_size];
 
-        let frame_is_speech = match vad.is_voice_segment(frame) {
-            Ok(result) => result,
-            Err(_) => {
-                // webrtc-vad error (invalid frame size or rate). Treat as
-                // non-speech rather than crashing — this shouldn't happen
-                // with correct frame sizing.
-                false
-            }
-        };
+        let frame_is_speech = vad.is_voice_segment(frame).unwrap_or_default();
 
         // Convert frame position to time in the VAD sample rate's timeline.
         let current_time = position as f64 / vad_sr as f64;
@@ -154,9 +146,7 @@ pub fn detect_speech_regions(audio: &[f32], sr: u32) -> Vec<Region> {
     }
 
     // --- Merge nearby regions ----------------------------------------------
-    let merged = merge_regions(&regions, SPEECH_MERGE_GAP_S);
-
-    merged
+    merge_regions(&regions, SPEECH_MERGE_GAP_S)
 }
 
 /// Merge speech regions that are separated by less than `gap_threshold` seconds.

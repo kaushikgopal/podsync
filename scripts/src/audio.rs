@@ -13,7 +13,6 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 
-use hound;
 use audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{
     Async, FixedAsync, Resampler, SincInterpolationParameters, SincInterpolationType,

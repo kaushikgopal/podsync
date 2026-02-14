@@ -216,15 +216,15 @@ fn create_mel_filterbank(sr: u32, n_fft: usize, n_mels: usize, fmin: f64, fmax: 
 
         let mut filter = vec![0.0f64; n_bins];
 
-        for k in 0..n_bins {
+        for (k, filter_val) in filter.iter_mut().enumerate().take(n_bins) {
             let k_f64 = k as f64;
 
             if k_f64 >= left && k_f64 <= center && center > left {
                 // Rising slope: left edge to center.
-                filter[k] = (k_f64 - left) / (center - left);
+                *filter_val = (k_f64 - left) / (center - left);
             } else if k_f64 > center && k_f64 <= right && right > center {
                 // Falling slope: center to right edge.
-                filter[k] = (right - k_f64) / (right - center);
+                *filter_val = (right - k_f64) / (right - center);
             } else {
                 // Outside this filter's range — weight is zero.
             }

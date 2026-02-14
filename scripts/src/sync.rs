@@ -134,8 +134,8 @@ fn correlate_full(a: &[f64], b: &[f64]) -> Vec<f64> {
     }
 
     // Zero lag and positive lags: these sit at the start of the circular buffer.
-    for i in 0..a_len {
-        output.push(result[i]);
+    for &val in result.iter().take(a_len) {
+        output.push(val);
     }
 
     output
