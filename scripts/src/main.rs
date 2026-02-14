@@ -41,7 +41,6 @@ const DEFAULT_OUTPUT_SUFFIX: &str = "synced";
 
 /// Window length at the end of the recording used for drift measurement.
 /// 120s gives enough material for a second correlation at the tail end.
-/// Must match the Python default for `compute_drift(end_window=120.0)`.
 const DRIFT_END_WINDOW_S: f64 = 120.0;
 
 // ---------------------------------------------------------------------------
