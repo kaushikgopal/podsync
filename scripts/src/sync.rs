@@ -246,10 +246,12 @@ pub fn find_offset(
 
     let peak_ratio = if second_peak_value > 0.0 {
         peak_value / (second_peak_value + EPSILON)
-    } else {
-        // Second peak is zero or negative — the primary peak is the only
-        // meaningful one. This is a strong match.
+    } else if *peak_value > 0.0 {
+        // Primary peak is positive but there's no meaningful second peak.
         10.0
+    } else {
+        // Both peaks are zero or negative — no meaningful correlation.
+        1.0
     };
 
     // Map ratio to [0, 1]: ratio 1.0 → 0.0 (peaks are equal, ambiguous),
