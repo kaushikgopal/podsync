@@ -2,16 +2,15 @@
 // vad — Voice Activity Detection and speech segment selection
 //
 // Uses Google's WebRTC VAD (via the webrtc-vad crate) to detect speech regions
-// in audio, then selects the best segment for cross-correlation using a
-// three-tier fallback strategy:
+// in audio, then picks one segment for cross-correlation.
 //
-//   Tier 1: Find a single region >= min_duration (ideal: clean, unambiguous)
-//   Tier 2: Use the longest single region >= 10s (contiguous preferred)
-//   Tier 3: Accumulate consecutive regions within 2s gaps until reaching
-//           min_duration (fragmented speech, still usable)
+// Selection strategy (most to least reliable):
+// 1. One contiguous region >= min_duration.
+// 2. The longest single region >= 10s.
+// 3. Combine nearby regions (gaps <= 2s) until reaching min_duration.
 //
-// All timestamps are in seconds on the original audio timeline, even when
-// the audio is resampled internally for VAD processing.
+// All timestamps are in seconds on the original audio timeline, even if we
+// resample internally for VAD processing.
 // ---------------------------------------------------------------------------
 
 use rubato::{Async, FixedAsync, Resampler, SincInterpolationParameters, SincInterpolationType, WindowFunction};
@@ -316,7 +315,7 @@ fn sample_rate_to_enum(sr: u32) -> SampleRate {
 }
 
 /// Resample audio for VAD processing. Uses rubato with moderate quality
-/// settings — VAD doesn't need audiophile-grade resampling.
+/// settings — VAD only needs reliable speech/non-speech decisions.
 fn resample_for_vad(audio: &[f32], from_sr: u32, to_sr: u32) -> Vec<f32> {
     let ratio = to_sr as f64 / from_sr as f64;
     let n_input_frames = audio.len();

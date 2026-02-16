@@ -1,12 +1,12 @@
 // ---------------------------------------------------------------------------
-// audio — Audio I/O and sample manipulation
+// audio — Audio file I/O and sample manipulation
 //
-// Handles loading audio files (any format symphonia supports), resampling to
-// the target sample rate, writing synced output as 24-bit WAV, and applying
-// time offsets (pad/trim) to align tracks.
+// This is the only module that reads or writes audio files.
+// It decodes input audio (any format symphonia supports), converts to mono,
+// resamples to the target sample rate, and writes 24-bit WAV output.
+// It also applies time offsets (pad/trim) so tracks line up with the master.
 //
-// Design principle: this module owns all disk I/O for audio. The other modules
-// (sync, vad, mfcc) work only with in-memory sample buffers.
+// The other modules (sync, vad, mfcc) only work with in-memory sample buffers.
 // ---------------------------------------------------------------------------
 
 use std::fmt;
@@ -29,12 +29,15 @@ use symphonia::core::probe::Hint;
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Standard podcast sample rate. Matches most DAW defaults and is the de facto
-/// standard for podcast distribution. All internal processing uses this rate.
+/// Standard podcast sample rate (44.1 kHz).
+/// This matches common digital audio workstation (DAW) defaults and podcast
+/// distribution expectations.
+/// All internal processing uses this rate.
 pub const TARGET_SAMPLE_RATE: u32 = 44_100;
 
-/// Maximum value for a 24-bit signed integer (2^23 - 1). Used when converting
-/// float32 samples [-1.0, 1.0] to 24-bit PCM integers for WAV output.
+/// Largest positive 24-bit signed PCM value (2^23 - 1).
+/// Used when converting float samples in [-1.0, 1.0] to 24-bit integer samples
+/// for WAV output.
 const PCM_24_MAX: f32 = 8_388_607.0;
 
 // ---------------------------------------------------------------------------
@@ -50,16 +53,16 @@ pub enum PodsyncError {
     /// The audio file was not found on disk.
     FileNotFound(String),
 
-    /// symphonia could not decode the audio file (corrupt, unsupported, etc).
+    /// symphonia could not decode the audio file (corrupt file or unsupported format).
     DecodeFailed(String),
 
-    /// The resampler failed (bad ratio, internal error, etc).
+    /// The resampler failed (invalid ratio or internal error).
     ResampleFailed(String),
 
-    /// The WAV writer failed (disk full, permissions, etc).
+    /// The WAV writer failed (for example: permissions error, full disk).
     WriteFailed(String),
 
-    /// An offset operation was invalid (e.g. trimming more samples than exist).
+    /// An offset operation was invalid (for example: trimming more samples than exist).
     InvalidOffset(String),
 }
 
@@ -94,17 +97,19 @@ pub fn seconds_to_samples(seconds: f64, sr: u32) -> i64 {
 // Loading
 // ---------------------------------------------------------------------------
 
-/// Load an audio file, resample to `target_sr`, and convert to mono float32.
+/// Load an audio file, resample to `target_sr`, and convert to mono `f32` samples.
 ///
-/// Supports WAV, MP3, FLAC, OGG/Vorbis, AIFF — anything symphonia can decode.
+/// Supports WAV, MP3, FLAC, OGG/Vorbis, AIFF, and other formats symphonia can decode.
 ///
 /// The loading pipeline is:
-///   1. Open file and probe format (symphonia)
-///   2. Decode all packets into interleaved f32 samples
-///   3. Downmix to mono by averaging channels
-///   4. Resample to target_sr if the file's native rate differs
+/// 1. Open the file and probe the container format.
+/// 2. Decode all packets into interleaved `f32` samples.
+/// 3. Downmix to mono by averaging channels.
+/// 4. Resample to `target_sr` if the file's native rate differs.
 ///
-/// Returns (samples, sample_rate) where samples is a Vec<f32> of mono audio.
+/// Returns `(samples, sample_rate_hz)`:
+/// - `samples`: mono float samples (typically in [-1.0, 1.0])
+/// - `sample_rate_hz`: the sample rate in Hz (this will be `target_sr` on success)
 pub fn load_audio(path: &Path, target_sr: u32) -> Result<(Vec<f32>, u32), PodsyncError> {
     // --- Validate the file exists before attempting decode -------------------
     if !path.exists() {
@@ -116,7 +121,7 @@ pub fn load_audio(path: &Path, target_sr: u32) -> Result<(Vec<f32>, u32), Podsyn
         .map_err(|e| PodsyncError::DecodeFailed(format!("{}: {}", path.display(), e)))?;
     let media_source = MediaSourceStream::new(Box::new(file), Default::default());
 
-    // --- Probe the format (WAV, MP3, FLAC, etc.) ----------------------------
+    // --- Probe the container format ----------------------------------------
     // The Hint lets symphonia use the file extension to narrow down formats,
     // but it will still probe the actual bytes if the hint is wrong.
     let mut hint = Hint::new();
@@ -203,7 +208,8 @@ pub fn load_audio(path: &Path, target_sr: u32) -> Result<(Vec<f32>, u32), Podsyn
     }
 
     // --- Downmix to mono by averaging channels ------------------------------
-    // librosa.load(..., mono=True) averages channels. We do the same.
+    // Match librosa's mono conversion (average channels) so results line up
+    // with the reference pipeline.
     let mono_samples = downmix_to_mono(&interleaved_samples, n_channels);
 
     // --- Resample to target_sr if needed ------------------------------------
@@ -220,7 +226,7 @@ pub fn load_audio(path: &Path, target_sr: u32) -> Result<(Vec<f32>, u32), Podsyn
 /// Downmix interleaved multi-channel audio to mono by averaging channels.
 ///
 /// For stereo input [L0, R0, L1, R1, ...], output is [(L0+R0)/2, (L1+R1)/2, ...].
-/// For mono input, this is a no-op copy.
+/// For mono input, this returns a copy of the input.
 fn downmix_to_mono(interleaved: &[f32], n_channels: usize) -> Vec<f32> {
     if n_channels == 1 {
         // Already mono — return a copy.
@@ -258,7 +264,8 @@ fn resample(audio: &[f32], from_sr: u32, to_sr: u32) -> Result<Vec<f32>, Podsync
     // Sinc interpolation parameters. These control the quality/speed tradeoff:
     // - sinc_len=256: length of the sinc interpolation filter. Longer = better
     //   quality, slower. 256 is high quality, suitable for offline processing.
-    // - f_cutoff=0.95: anti-aliasing filter cutoff as a fraction of Nyquist.
+    // - f_cutoff=0.95: anti-aliasing filter cutoff as a fraction of Nyquist
+    //   (half the sample rate).
     //   0.95 preserves most of the bandwidth while preventing aliasing.
     // - oversampling_factor=256: internal upsampling for sinc table lookup.
     //   Higher = more accurate interpolation between sinc table entries.
@@ -326,10 +333,12 @@ fn resample(audio: &[f32], from_sr: u32, to_sr: u32) -> Result<Vec<f32>, Podsync
 
 /// Write a mono audio buffer to a 24-bit PCM WAV file.
 ///
-/// Creates parent directories if they don't exist. The output format is always:
-///   - Channels: 1 (mono)
-///   - Sample format: 24-bit signed integer PCM
-///   - Container: WAV (RIFF)
+/// Creates parent directories if they don't exist.
+///
+/// The output format is fixed:
+/// - 1 channel (mono)
+/// - 24-bit signed PCM samples
+/// - WAV container (RIFF)
 ///
 /// The format is explicit (not inferred from the file extension) to prevent
 /// silent production of non-WAV files.

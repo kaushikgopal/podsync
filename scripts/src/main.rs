@@ -31,8 +31,8 @@ use vad::{PREFERRED_SPEECH_DURATION_S, VAD_SEARCH_LIMIT_S, find_first_speech_seg
 // ---------------------------------------------------------------------------
 
 /// Default number of seconds of speech to extract for cross-correlation.
-/// 120s gives enough spectral material for a reliable MFCC correlation peak
-/// while keeping runtime manageable (~3–5s per track on typical hardware).
+/// 120s is usually enough speech for a reliable MFCC match while keeping
+/// runtime manageable (~3–5s per track on typical hardware).
 const DEFAULT_SYNC_WINDOW_S: f64 = 120.0;
 
 /// Default suffix appended to output filenames. The output for "track.wav"
@@ -51,7 +51,7 @@ const DRIFT_END_WINDOW_S: f64 = 120.0;
 ///
 /// Aligns individual participant tracks to a master track using MFCC-based
 /// cross-correlation, then outputs synced WAV files that can be dropped into
-/// a DAW at position 0:00.
+/// a digital audio workstation (DAW) at position 0:00.
 #[derive(Parser)]
 #[command(name = "podsync")]
 struct Cli {
@@ -180,7 +180,7 @@ fn format_duration(seconds: f64) -> String {
 // Log file
 // ---------------------------------------------------------------------------
 
-/// Write a mini log file summarizing the sync run.
+/// Write a log file summarizing the sync run.
 ///
 /// Placed next to the master file as `podsync-<timestamp>.log`. Each run
 /// produces a unique file so previous logs are preserved.
@@ -407,8 +407,8 @@ fn main() {
     eprintln!(" done ({} coefficients × {} frames)", master_mfcc.len(), master_mfcc[0].len());
 
     // --- Process and write each track --------------------------------------
-    // Process each track, write its output immediately, then drop the audio
-    // buffer. This keeps peak memory at O(1) audio buffers instead of O(N).
+    // Process each track, write its output immediately, then drop the audio buffer.
+    // This keeps peak memory to one track buffer at a time.
     let max_length = master_audio.len();
     let mut summaries: Vec<TrackSummary> = Vec::with_capacity(track_paths.len());
 
@@ -462,7 +462,7 @@ fn main() {
             }
         };
 
-        // Audio buffer from `result` is dropped here.
+        // Drop the per-track audio buffer here to free memory.
         summaries.push(summary);
     }
 

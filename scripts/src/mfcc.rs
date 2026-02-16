@@ -1,19 +1,23 @@
 // ---------------------------------------------------------------------------
-// mfcc — Mel-Frequency Cepstral Coefficient extraction
+// mfcc — Mel-Frequency Cepstral Coefficient (MFCC) extraction
 //
-// Reimplements the MFCC pipeline from librosa 0.11.0 for parity with the
-// Python version. The pipeline is:
+// MFCCs are a compact "fingerprint" of the sound spectrum.
+// They work well for aligning speech across recordings because they are less
+// sensitive to volume and microphone differences than raw waveforms.
 //
-//   audio samples
-//     -> center-pad with zeros (n_fft / 2 on each side)
-//     -> frame into overlapping windows (n_fft=2048, hop_length=512)
-//     -> apply Hann window to each frame
-//     -> FFT each frame -> power spectrum |X(f)|^2
-//     -> apply mel filterbank (128 triangular filters, Slaney normalization)
-//     -> convert power to decibels (ref=1.0, amin=1e-10, top_db=80.0)
-//     -> DCT type II (orthonormal) -> keep first n_mfcc coefficients
+// This module implements the same MFCC pipeline as librosa 0.11.0 (Python),
+// so the Rust version matches the reference output.
 //
-// Each step is a separate function so the pipeline is easy to follow and test.
+// Pipeline (high level):
+// 1. Center-pad the audio with zeros (`n_fft / 2` on each side).
+// 2. Split into overlapping frames (`n_fft=2048`, `hop_length=512`).
+// 3. Apply a Hann window to each frame.
+// 4. FFT each frame and compute the power spectrum (|X(f)|^2).
+// 5. Apply a mel filterbank (128 triangular filters, Slaney/bandwidth normalization).
+// 6. Convert power to decibels (`ref=1.0`, `amin=1e-10`, `top_db=80.0`).
+// 7. DCT type II (orthonormal) and keep the first `n_mfcc` coefficients.
+//
+// Each step is a separate function so the pipeline is easy to read and test.
 // ---------------------------------------------------------------------------
 
 use std::f64::consts::PI;
@@ -47,9 +51,9 @@ const POWER_TO_DB_TOP_DB: f64 = 80.0;
 
 /// Create a periodic Hann window of the given size.
 ///
-/// The periodic variant (as opposed to symmetric) is standard for STFT because
-/// it has better frequency-domain properties for overlapping frames. This
-/// matches `scipy.signal.get_window('hann', n_fft)` and librosa's default.
+/// We use the periodic Hann window because it works well with overlapping FFT
+/// frames. This mirrors the default window used by scipy/librosa, which keeps
+/// our results aligned with the reference.
 ///
 /// Formula: w[n] = 0.5 * (1 - cos(2*pi*n / size))
 fn create_hann_window(size: usize) -> Vec<f64> {
@@ -67,10 +71,10 @@ fn create_hann_window(size: usize) -> Vec<f64> {
 
 /// Compute the power spectrum of audio using the Short-Time Fourier Transform.
 ///
-/// Matches librosa's `np.abs(librosa.stft(y, ...))**2` with these defaults:
-///   - center=True: pad audio with n_fft/2 zeros on each side before framing
-///   - window='hann': Hann window applied to each frame
-///   - power=2.0: return squared magnitude (power spectrum)
+/// Matches `np.abs(librosa.stft(y, ...))**2` with:
+/// - `center=True`: pad audio with `n_fft / 2` zeros on each side before framing.
+/// - `window="hann"`: apply a Hann window to each frame.
+/// - `power=2.0`: return squared magnitude (power spectrum).
 ///
 /// Returns a Vec of frames, where each frame is a Vec<f64> of length
 /// (n_fft/2 + 1) — the positive-frequency bins of the FFT.
@@ -78,7 +82,7 @@ fn stft_power(audio: &[f32], n_fft: usize, hop_length: usize) -> Vec<Vec<f64>> {
     // --- Center-pad the audio -----------------------------------------------
     // librosa pads with n_fft/2 zeros on each side so that the first frame is
     // centered on the first sample. This affects the number of output frames
-    // and must be matched for parity.
+    // and we do the same so our frame count matches librosa.
     let pad_length = n_fft / 2;
     let padded_len = pad_length + audio.len() + pad_length;
     let mut padded = vec![0.0f64; padded_len];
@@ -133,13 +137,13 @@ fn stft_power(audio: &[f32], n_fft: usize, hop_length: usize) -> Vec<Vec<f64>> {
 
 /// Convert frequency in Hz to the mel scale.
 ///
-/// Uses the Slaney formula (linear below 1000 Hz, logarithmic above), which
-/// matches librosa's default (htk=False).
+/// Uses librosa's default mel scale mapping (linear below 1000 Hz, log above).
+/// We use the same mapping so our mel filters match the reference.
 ///
 /// The mel scale approximates human pitch perception: equal distances in mel
 /// correspond to equal perceived pitch differences.
 fn hz_to_mel(hz: f64) -> f64 {
-    // Slaney's mel scale has two regions:
+    // The mel mapping has two regions:
     //   Linear: below 1000 Hz, where f_sp = 200/3 Hz per mel
     //   Logarithmic: above 1000 Hz, where logstep = ln(6.4) / 27 per mel
     //
@@ -158,7 +162,7 @@ fn hz_to_mel(hz: f64) -> f64 {
 
 /// Convert mel scale value back to Hz.
 ///
-/// Inverse of hz_to_mel. Uses the Slaney formula (htk=False).
+/// Inverse of `hz_to_mel` using the same librosa-default mapping.
 fn mel_to_hz(mel: f64) -> f64 {
     let f_sp = 200.0 / 3.0;             // Hz per mel in the linear region
     let min_log_hz = 1000.0;
@@ -182,6 +186,9 @@ fn mel_to_hz(mel: f64) -> f64 {
 /// (in Hz), so that each filter has equal energy. This prevents low-frequency
 /// filters (which are narrow in Hz) from having disproportionately high peaks
 /// compared to high-frequency filters (which are wide in Hz).
+///
+/// In plain terms: we rescale each triangle by its bandwidth so narrow and
+/// wide filters contribute roughly the same total energy.
 ///
 /// Returns a Vec of n_mels filters, where each filter is a Vec<f64> of length
 /// n_fft/2 + 1 (one weight per frequency bin).
@@ -232,10 +239,8 @@ fn create_mel_filterbank(sr: u32, n_fft: usize, n_mels: usize, fmin: f64, fmax: 
             }
         }
 
-        // Slaney normalization: divide by the width of the mel band in Hz.
-        // This makes each filter contribute equal energy regardless of its
-        // bandwidth, which is important because mel filters get wider (in Hz)
-        // at higher frequencies.
+        // Slaney normalization: rescale by band width so no single band range
+        // dominates just because it covers fewer/more Hz.
         let enorm = 2.0 / (hz_points[m + 2] - hz_points[m]);
         for weight in &mut filter {
             *weight *= enorm;
@@ -290,6 +295,9 @@ fn power_to_db(power: &[f64], amin: f64, top_db: f64) -> Vec<f64> {
 ///
 /// Takes `input` of length N and returns the first `n_output` DCT coefficients.
 ///
+/// In this pipeline, the DCT turns the mel-spectrum (in dB) into MFCC
+/// coefficients. Most of the useful shape information is in the first few.
+///
 /// The DCT-II formula with ortho normalization is:
 ///   X[k] = scale * sum_{n=0}^{N-1} x[n] * cos(pi * (n + 0.5) * k / N)
 ///
@@ -326,17 +334,19 @@ fn dct_ii_ortho(input: &[f64], n_output: usize) -> Vec<f64> {
 
 /// Extract MFCC features from audio.
 ///
-/// This is the Rust equivalent of:
-///   librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=n_mfcc, hop_length=hop_length)
-///
-/// with all librosa 0.11.0 defaults:
-///   n_fft=2048, n_mels=128, fmin=0, fmax=sr/2, center=True, power=2.0,
-///   norm='slaney', ref=1.0, amin=1e-10, top_db=80.0, dct type=2 norm='ortho'
+/// This matches `librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=n_mfcc, hop_length=hop_length)`
+/// using librosa 0.11.0 defaults:
+/// - `n_fft=2048`, `n_mels=128`
+/// - `fmin=0`, `fmax=sr/2`, `center=True`, `power=2.0`
+/// - mel normalization: Slaney (`norm="slaney"`, normalize by filter bandwidth)
+/// - `power_to_db(ref=1.0, amin=1e-10, top_db=80.0)`
+/// - DCT: type II, `norm="ortho"`
 ///
 /// Returns a Vec of n_mfcc coefficient vectors, where each inner Vec has
 /// `time_frames` elements. Layout: result[coefficient_index][time_frame_index].
 ///
-/// This layout matches the Python code's `mfcc_master[i]` indexing in sync.py.
+/// This layout matches the Python reference implementation: index by
+/// coefficient first, then time frame.
 pub fn extract_mfcc(
     audio: &[f32],
     sr: u32,
@@ -401,8 +411,8 @@ mod tests {
     fn make_rich_signal(duration: f32, sr: u32) -> Vec<f32> {
         let n_samples = (sr as f32 * duration) as usize;
         let mut samples = Vec::with_capacity(n_samples);
-        // Simple deterministic pseudo-random noise using a linear congruential
-        // generator. Avoids depending on a rand crate for tests.
+        // Generate repeatable noise with a simple arithmetic sequence so tests
+        // stay deterministic without pulling in a randomness dependency.
         let mut rng_state: u64 = 42;
         for i in 0..n_samples {
             let t = i as f32 / sr as f32;
@@ -470,11 +480,11 @@ mod tests {
         // Should have n_mfcc coefficient vectors.
         assert_eq!(mfcc.len(), n_mfcc);
 
-        // Each coefficient vector should have the expected number of time frames.
-        // librosa formula: 1 + floor((n_samples + 2*pad - n_fft) / hop_length)
-        // where pad = n_fft/2 for center=True.
-        // = 1 + floor(n_samples / hop_length)
-        // For n_samples=88200, hop_length=512: 1 + 172 = 173
+        // Each coefficient vector should have the expected number of frames.
+        // With center=True, librosa counts:
+        //   1 + floor((n_samples + 2*pad - n_fft) / hop_length)
+        // and with pad = n_fft/2, this simplifies to:
+        //   1 + floor(n_samples / hop_length)
         let expected_frames = 1 + n_samples / hop_length;
         assert_eq!(
             mfcc[0].len(),

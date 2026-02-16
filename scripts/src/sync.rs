@@ -1,11 +1,11 @@
 // ---------------------------------------------------------------------------
 // sync — MFCC cross-correlation for offset detection and drift measurement
 //
-// Finds the time offset between a track and a master recording by:
-//   1. Extracting MFCC features from both
-//   2. Cross-correlating each MFCC coefficient independently
-//   3. Summing the correlations and finding the peak
-//   4. Converting the peak position to a time offset in seconds
+// Finds the time offset between a track and the master recording:
+// 1. Extract MFCC features for both signals.
+// 2. Cross-correlate each MFCC coefficient.
+// 3. Sum the correlations and find the best peak.
+// 4. Convert that peak location into a time offset (seconds).
 //
 // Also measures clock drift by comparing alignment at the end of the
 // recording versus the start.
@@ -20,14 +20,14 @@ use crate::mfcc::extract_mfcc;
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Number of MFCC coefficients to extract. 20 captures the vocal tract shape
-/// (formants) without introducing high-frequency noise. Standard in speech
-/// processing — Kaldi uses 13, librosa defaults to 20.
+/// Number of MFCC coefficients to extract.
+/// 20 is a common choice for speech: enough detail to match recordings without
+/// leaning too hard on the highest (noisiest) coefficients.
 const N_MFCC_COEFFICIENTS: usize = 20;
 
-/// STFT hop length in samples. At 44.1kHz this is ~11.6ms per frame — the
-/// standard resolution for speech analysis. Smaller values increase precision
-/// but also computation time quadratically (via cross-correlation).
+/// STFT hop length in samples. At 44.1kHz this is ~11.6ms per frame.
+/// Smaller values give finer alignment but produce more frames, which makes
+/// correlation slower.
 pub const HOP_LENGTH: usize = 512;
 
 /// Small epsilon to prevent division by zero in normalization and confidence
@@ -37,8 +37,8 @@ const EPSILON: f64 = 1e-6;
 
 /// When searching for the second-best correlation peak (to compute confidence),
 /// exclude this many frames around the best peak. At HOP_LENGTH=512 and
-/// sr=44100, 50 frames ≈ 0.58 seconds. This prevents sidelobes of the main
-/// peak from being counted as an independent match.
+/// sr=44100, 50 frames ≈ 0.58 seconds. This prevents the main peak's
+/// immediate neighborhood from being treated as a second, independent peak.
 const PEAK_EXCLUSION_RADIUS: usize = 50;
 
 /// Confidence threshold: below this, the correlation peak isn't distinct enough
@@ -54,7 +54,10 @@ pub const LOW_CONFIDENCE_THRESHOLD: f64 = 0.5;
 // Cross-correlation (FFT-based)
 // ---------------------------------------------------------------------------
 
-/// Cross-correlate two real signals (equivalent to scipy.signal.correlate mode='full').
+/// Cross-correlate two real signals (equivalent to `scipy.signal.correlate(mode="full")`).
+///
+/// Think of this as: slide `b` across `a` and score how similar they are at
+/// each shift.
 ///
 /// Output length is a.len() + b.len() - 1.
 ///
@@ -62,9 +65,10 @@ pub const LOW_CONFIDENCE_THRESHOLD: f64 = 0.5;
 /// b.len() - 1. A peak to the right of zero-lag means signal `a` contains the
 /// content of `b` at a later position.
 ///
-/// Implementation: FFT-based correlation via the convolution theorem.
-///   correlate(a, b) = IFFT(FFT(a) * conj(FFT(b)))
-/// padded to the next power of two for FFT efficiency.
+/// Implementation: FFT-based correlation.
+/// We FFT both inputs, multiply one spectrum by the conjugate of the other,
+/// then inverse-FFT back to the time domain. Padding to the next power of two
+/// keeps the FFT fast.
 fn correlate_full(a: &[f64], b: &[f64], planner: &mut RealFftPlanner<f64>) -> Vec<f64> {
     let output_len = a.len() + b.len() - 1;
 
@@ -92,7 +96,7 @@ fn correlate_full(a: &[f64], b: &[f64], planner: &mut RealFftPlanner<f64>) -> Ve
     forward.process(&mut b_padded, &mut b_spectrum).unwrap();
 
     // --- Multiply A * conj(B) in frequency domain --------------------------
-    // This implements cross-correlation via the convolution theorem.
+    // This implements cross-correlation in the frequency domain.
     for (a_val, b_val) in a_spectrum.iter_mut().zip(b_spectrum.iter()) {
         let re = a_val.re * b_val.re + a_val.im * b_val.im;
         let im = a_val.im * b_val.re - a_val.re * b_val.im;
@@ -110,7 +114,7 @@ fn correlate_full(a: &[f64], b: &[f64], planner: &mut RealFftPlanner<f64>) -> Ve
         *val *= scale;
     }
 
-    // --- Rearrange to match scipy correlate mode='full' --------------------
+    // --- Rearrange to match SciPy's full output order ----------------------
     // The IFFT produces circular cross-correlation with zero-lag at index 0:
     //   result[0]            = zero lag
     //   result[1..a_len]     = positive lags (a leads b)
@@ -121,8 +125,9 @@ fn correlate_full(a: &[f64], b: &[f64], planner: &mut RealFftPlanner<f64>) -> Ve
     //   output[b_len-1]             = zero lag
     //   output[b_len..output_len]   = positive lags (lag 1 to a_len-1)
     //
-    // We rearrange by pulling negative lags from the end of the circular
-    // buffer and placing them before the zero-lag and positive-lag values.
+    // SciPy expects the negative-lag values first, then zero lag, then
+    // positive lags. We take the wrapped-around tail from the circular output
+    // and place it in front.
     let a_len = a.len();
     let b_len = b.len();
     let mut output = Vec::with_capacity(output_len);
@@ -235,9 +240,8 @@ fn correlate_mfcc_pair(
     let n_coeffs = mfcc_master.len();
 
     // --- Cross-correlate each coefficient independently, then sum ----------
-    // Correlating per-coefficient preserves spectral discrimination. If we
-    // flattened first, high-energy coefficients would dominate and subtle
-    // spectral differences (like distinguishing two speakers) would be lost.
+    // Correlating each coefficient separately keeps every spectral band
+    // visible; summing after keeps loud bands from drowning quieter ones.
     let mut planner = RealFftPlanner::<f64>::new();
     let mut correlation: Option<Vec<f64>> = None;
 
@@ -245,9 +249,8 @@ fn correlate_mfcc_pair(
         let m = &mfcc_master[i];
         let t = &mfcc_track[i];
 
-        // Normalize each coefficient's time series to zero mean, unit variance.
-        // This ensures all coefficients contribute equally to the sum.
-        // Use f64 accumulators for numerical stability.
+        // Shift each coefficient series to zero mean and scale to unit
+        // variance so they contribute evenly. Use f64 to reduce rounding noise.
         let m_mean: f64 = m.iter().sum::<f64>() / m.len() as f64;
         let m_std: f64 = {
             let variance = m.iter().map(|&v| (v - m_mean) * (v - m_mean)).sum::<f64>() / m.len() as f64;
@@ -353,8 +356,9 @@ pub fn compute_drift(
 
     let master_end = &master[master.len() - end_samples..];
 
-    // Calculate where in the track corresponds to the master's end region.
-    // master[M] corresponds to track[M - initial_offset_in_samples].
+    // Figure out which samples in the track line up with the master's final
+    // section by subtracting the initial offset (in samples) from the master
+    // index.
     let track_end_start = (master.len() as f64 - end_samples as f64 - initial_offset * sr as f64) as i64;
 
     if track_end_start < 0 {
@@ -649,8 +653,8 @@ mod tests {
 
     #[test]
     fn test_zero_confidence_for_silence() {
-        // Correlating silence against silence should produce near-zero confidence
-        // (after fix 1D which handles the degenerate case).
+        // Correlating silence against silence should produce near-zero confidence.
+        // With no signal, every lag looks the same, so there is no distinct peak.
         let sr: u32 = 44100;
         let duration = 5.0;
         let n_samples = (sr as f64 * duration) as usize;
