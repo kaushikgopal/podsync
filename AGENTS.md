@@ -22,7 +22,11 @@ references/
   ALGORITHM.md               # MFCC cross-correlation deep dive
   DEPENDENCIES.md            # library rationale
   TROUBLESHOOTING.md         # common failure modes
-SKILL.md                     # AI skill orchestration instructions
+.agents/
+  skills/
+    podsync/
+      SKILL.md               # AI skill orchestration instructions
+      references/             # skill-bundled reference docs
 ```
 
 ## Tech stack

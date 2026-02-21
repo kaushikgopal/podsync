@@ -99,9 +99,9 @@ After syncing, verify in your DAW:
 
 ## AI Skill
 
-This repo doubles as an AI coding agent skill. `SKILL.md` contains orchestration instructions for AI agents (e.g. Claude Code) — scanning episode folders for files, confirming selections with the user, invoking the CLI, and reporting results.
+This repo doubles as an AI coding agent skill. `.agents/skills/podsync/SKILL.md` contains orchestration instructions for AI agents — scanning episode folders for files, confirming selections with the user, invoking the CLI, and reporting results.
 
-To use as a skill, symlink or copy this repo into your project's skill directory.
+To use as a skill, symlink or copy `.agents/skills/podsync/` into your project's skill directory.
 
 ## Running tests
 
