@@ -17,16 +17,12 @@ scripts/
     sync.rs                  # FFT cross-correlation, offset detection, drift
     vad.rs                   # WebRTC VAD speech detection, segment selection
   podsync                    # compiled binary (gitignored)
-references/
-  DESIGN.md                  # architecture + algorithm overview
-  ALGORITHM.md               # MFCC cross-correlation deep dive
-  DEPENDENCIES.md            # library rationale
-  TROUBLESHOOTING.md         # common failure modes
 .agents/
   skills/
     podsync/
       SKILL.md               # AI skill orchestration instructions
-      references/             # skill-bundled reference docs
+      references/             # architecture, algorithm, troubleshooting docs
+      assets/                 # example output
 ```
 
 ## Tech stack

@@ -20,7 +20,7 @@ Podsync fixes this. Give it the master track and the individual tracks, and it o
 3. **Drift Measurement** — Correlates again near the end of the recording and compares the offset to the start. The difference is drift caused by different clock rates between recording devices. Podsync reports the drift so you know if manual adjustment is needed.
 4. **Output** — Pads or trims each track to match the master's length and writes synced WAV files.
 
-See [references/ALGORITHM.md](references/ALGORITHM.md) for the full technical deep dive.
+See [ALGORITHM.md](.agents/skills/podsync/references/ALGORITHM.md) for the full technical deep dive.
 
 ## Install
 
@@ -126,7 +126,7 @@ cd scripts && cargo test
 | [realfft](https://github.com/HEnquist/realfft) | FFT for MFCC extraction and cross-correlation |
 | [clap](https://github.com/clap-rs/clap) | CLI argument parsing |
 
-See [references/DEPENDENCIES.md](references/DEPENDENCIES.md) for detailed rationale.
+See [DEPENDENCIES.md](.agents/skills/podsync/references/DEPENDENCIES.md) for detailed rationale.
 
 ## License
 

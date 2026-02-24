@@ -225,18 +225,17 @@ podsync/
 │       ├── mfcc.rs             # MFCC feature extraction
 │       ├── sync.rs             # Cross-correlation logic
 │       └── vad.rs              # Voice activity detection
-├── references/
-│   ├── DESIGN.md               # This document
-│   ├── ALGORITHM.md            # Deep dive on sync algorithm
-│   ├── TROUBLESHOOTING.md      # Common issues and solutions
-│   └── DEPENDENCIES.md         # Rust crates and why
-├── .agents/
-│   └── skills/
-│       └── podsync/
-│           ├── SKILL.md        # AI skill orchestration instructions
-│           └── references/     # Skill-bundled reference docs
-└── assets/
-    └── example-output.txt      # Sample CLI output
+└── .agents/
+    └── skills/
+        └── podsync/
+            ├── SKILL.md            # AI skill orchestration instructions
+            ├── references/
+            │   ├── DESIGN.md       # This document
+            │   ├── ALGORITHM.md    # Deep dive on sync algorithm
+            │   ├── TROUBLESHOOTING.md
+            │   └── DEPENDENCIES.md # Rust crates and why
+            └── assets/
+                └── example-output.txt
 ```
 
 ## Future Considerations (Not Implemented)

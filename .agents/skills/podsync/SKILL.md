@@ -16,6 +16,7 @@ Automatically align individual participant audio tracks to a master recording so
 - **[references/ALGORITHM.md](references/ALGORITHM.md)** — Deep dive on MFCC cross-correlation sync algorithm
 - **[references/TROUBLESHOOTING.md](references/TROUBLESHOOTING.md)** — Common issues and solutions
 - **[references/DEPENDENCIES.md](references/DEPENDENCIES.md)** — Rust crates and rationale
+- **[assets/example-output.txt](assets/example-output.txt)** — Sample CLI output
 
 ## Workflow
 
