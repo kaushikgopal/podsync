@@ -2,7 +2,7 @@
 // vad — Voice Activity Detection and speech segment selection
 //
 // Uses Google's WebRTC VAD (via the webrtc-vad crate) to detect speech regions
-// in audio, then picks one segment for cross-correlation.
+// in audio, then ranks candidate segments for cross-correlation.
 //
 // Selection strategy (most to least reliable):
 // 1. One contiguous region >= min_duration.
@@ -13,9 +13,12 @@
 // resample internally for VAD processing.
 // ---------------------------------------------------------------------------
 
-use rubato::{Async, FixedAsync, Resampler, SincInterpolationParameters, SincInterpolationType, WindowFunction};
 use audioadapter_buffers::direct::InterleavedSlice;
-use webrtc_vad::{Vad, SampleRate, VadMode};
+use rubato::{
+    Async, FixedAsync, Resampler, SincInterpolationParameters, SincInterpolationType,
+    WindowFunction,
+};
+use webrtc_vad::{SampleRate, Vad, VadMode};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -101,10 +104,7 @@ pub fn detect_speech_regions(audio: &[f32], sr: u32) -> Vec<Region> {
         })
         .collect();
 
-    let mut vad = Vad::new_with_rate_and_mode(
-        sample_rate_to_enum(vad_sr),
-        WEBRTC_AGGRESSIVENESS,
-    );
+    let mut vad = Vad::new_with_rate_and_mode(sample_rate_to_enum(vad_sr), WEBRTC_AGGRESSIVENESS);
 
     let frame_size = (vad_sr * WEBRTC_FRAME_DURATION_MS / 1000) as usize;
 
@@ -178,6 +178,86 @@ fn merge_regions(regions: &[Region], gap_threshold: f64) -> Vec<Region> {
 // Speech segment selection
 // ---------------------------------------------------------------------------
 
+/// Find several speech segments suitable for cross-correlation.
+///
+/// Candidates are ranked from most to least promising:
+///
+/// 1. Long contiguous regions that meet `min_duration`.
+/// 2. Other contiguous regions that are at least
+///    `MIN_SINGLE_REGION_DURATION_S`.
+/// 3. Accumulated nearby-region clusters as a final fallback.
+///
+/// Returns up to `max_candidates` regions, ordered best-first. If no speech was
+/// found at all, returns an empty Vec.
+///
+/// The matcher uses these as alternate "entry points" into the participant
+/// track. The goal is not to exhaustively search every voiced span, but to keep
+/// a few independent, high-value options in reserve.
+pub fn find_speech_candidates(
+    audio: &[f32],
+    sr: u32,
+    min_duration: f64,
+    search_limit: f64,
+    max_candidates: usize,
+) -> Vec<Region> {
+    if max_candidates == 0 {
+        return Vec::new();
+    }
+
+    // Limit search scope.
+    let max_samples = (search_limit * sr as f64) as usize;
+    let limited_len = audio.len().min(max_samples);
+    let audio_limited = &audio[..limited_len];
+
+    let regions = detect_speech_regions(audio_limited, sr);
+
+    if regions.is_empty() {
+        return Vec::new();
+    }
+
+    let mut candidates: Vec<Region> = Vec::with_capacity(max_candidates);
+
+    // Prefer longer contiguous regions first because they produce the cleanest
+    // correlation peaks. Break ties by earlier start time for stability.
+    let mut regions_by_length = regions.clone();
+    regions_by_length.sort_by(|a, b| {
+        let dur_a = a.1 - a.0;
+        let dur_b = b.1 - b.0;
+        dur_b
+            .partial_cmp(&dur_a)
+            .unwrap()
+            .then_with(|| a.0.total_cmp(&b.0))
+    });
+
+    // Tier 1: long contiguous regions. These are the most reliable because
+    // they minimize silence and produce the clearest correlation peaks.
+    for &(start, end) in &regions_by_length {
+        if (end - start) >= min_duration {
+            push_unique_region(&mut candidates, (start, end), max_candidates);
+        } else {
+            // Too short for Tier 1.
+        }
+    }
+
+    // Tier 2: shorter but still contiguous regions. These are fallback
+    // candidates when we could not find enough long speech.
+    for &(start, end) in &regions_by_length {
+        if (end - start) >= MIN_SINGLE_REGION_DURATION_S {
+            push_unique_region(&mut candidates, (start, end), max_candidates);
+        } else {
+            // Too short for Tier 2.
+        }
+    }
+
+    // Tier 3: clustered fragments. This is last because gaps inside the span
+    // make correlation less clean, but it is still better than giving up.
+    for region in accumulated_speech_clusters(&regions) {
+        push_unique_region(&mut candidates, region, max_candidates);
+    }
+
+    candidates
+}
+
 /// Find a speech segment suitable for cross-correlation.
 ///
 /// Uses a three-tier strategy, from most to least reliable:
@@ -200,62 +280,67 @@ pub fn find_first_speech_segment(
     min_duration: f64,
     search_limit: f64,
 ) -> Option<Region> {
-    // Limit search scope.
-    let max_samples = (search_limit * sr as f64) as usize;
-    let limited_len = audio.len().min(max_samples);
-    let audio_limited = &audio[..limited_len];
+    let candidates = find_speech_candidates(audio, sr, min_duration, search_limit, 1);
 
-    let regions = detect_speech_regions(audio_limited, sr);
-
-    if regions.is_empty() {
-        return None;
-    }
-
-    // ------------------------------------------------------------------
-    // Tier 1: Find a single region that meets the preferred duration.
-    // Sort by duration (longest first) so we pick the best candidate.
-    // ------------------------------------------------------------------
-    let mut regions_by_length = regions.clone();
-    regions_by_length.sort_by(|a, b| {
-        let dur_a = a.1 - a.0;
-        let dur_b = b.1 - b.0;
-        dur_b.partial_cmp(&dur_a).unwrap()
-    });
-
-    if let Some(&(start, end)) = regions_by_length.first() {
-        if end - start >= min_duration {
-            return Some((start, end));
-        }
-        // Longest region is too short — fall through to Tier 2.
-    }
-
-    // ------------------------------------------------------------------
-    // Tier 2: Use the longest single region if it's at least 10s.
-    // A shorter but contiguous region produces a cleaner correlation peak
-    // than a sparse accumulation of tiny fragments with gaps.
-    // ------------------------------------------------------------------
-    let (longest_start, longest_end) = regions_by_length[0];
-    let longest_duration = longest_end - longest_start;
-
-    if longest_duration >= MIN_SINGLE_REGION_DURATION_S {
-        return Some((longest_start, longest_end));
+    if let Some(&region) = candidates.first() {
+        Some(region)
     } else {
-        // Longest region is very short — fall through to accumulation.
+        None
     }
+}
 
-    // ------------------------------------------------------------------
-    // Tier 3: Accumulate consecutive regions that are close together.
-    // Walk regions in chronological order. Reset accumulation when a gap
-    // exceeds ACCUMULATION_GAP_LIMIT_S.
-    // ------------------------------------------------------------------
+/// Push a region into `candidates` unless it overlaps an existing candidate or
+/// the target length has already been reached.
+///
+/// Overlap suppression matters because nearby variants of the same speech span
+/// would otherwise look like multiple candidates and later inflate agreement.
+fn push_unique_region(candidates: &mut Vec<Region>, region: Region, max_candidates: usize) {
+    if candidates.len() >= max_candidates {
+        return;
+    } else if candidates
+        .iter()
+        .copied()
+        .any(|existing| regions_overlap(existing, region))
+    {
+        return;
+    } else {
+        candidates.push(region);
+    }
+}
+
+/// Check whether two regions overlap in time.
+fn regions_overlap(a: Region, b: Region) -> bool {
+    a.0 < b.1 && b.0 < a.1
+}
+
+/// Build fallback candidates by accumulating nearby regions into clusters.
+///
+/// Each returned region spans from the first region in the cluster to the end
+/// of the last region in the cluster. Clusters are ranked by total speech
+/// duration, with ties broken by earlier start time.
+///
+/// We rank by *speech content*, not just wall-clock span, because a long span
+/// full of silence is less useful for matching than a denser span with more
+/// voiced material.
+fn accumulated_speech_clusters(regions: &[Region]) -> Vec<Region> {
+    let mut clusters: Vec<(Region, f64)> = Vec::new();
     let mut total_speech = 0.0;
     let mut segment_start: Option<f64> = None;
     let mut prev_end: Option<f64> = None;
 
-    for &(start, end) in &regions {
+    for &(start, end) in regions {
         if let Some(pe) = prev_end {
             if (start - pe) > ACCUMULATION_GAP_LIMIT_S {
-                // Gap too large — the previous cluster wasn't enough. Reset.
+                if let (Some(seg_start), Some(cluster_end)) = (segment_start, prev_end) {
+                    if total_speech > 0.0 {
+                        clusters.push(((seg_start, cluster_end), total_speech));
+                    } else {
+                        // Empty cluster — nothing to record.
+                    }
+                } else {
+                    // No active cluster to flush.
+                }
+
                 total_speech = 0.0;
                 segment_start = None;
             } else {
@@ -273,30 +358,28 @@ pub fn find_first_speech_segment(
 
         total_speech += end - start;
         prev_end = Some(end);
-
-        if total_speech >= min_duration {
-            return Some((segment_start.unwrap(), end));
-        } else {
-            // Haven't accumulated enough yet — continue to next region.
-        }
     }
 
-    // ------------------------------------------------------------------
-    // Fallback: Return whatever we accumulated, even if it's shorter than
-    // min_duration. Some speech is better than none — the caller can check
-    // correlation confidence to decide if the result is trustworthy.
-    // ------------------------------------------------------------------
-    if let (Some(seg_start), Some(pe)) = (segment_start, prev_end) {
+    if let (Some(seg_start), Some(cluster_end)) = (segment_start, prev_end) {
         if total_speech > 0.0 {
-            return Some((seg_start, pe));
+            clusters.push(((seg_start, cluster_end), total_speech));
         } else {
-            // No speech accumulated at all.
+            // Final cluster had no speech.
         }
     } else {
-        // No regions were processed.
+        // No trailing cluster to flush.
     }
 
-    None
+    clusters.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap()
+            .then_with(|| (a.0).0.total_cmp(&(b.0).0))
+    });
+
+    clusters
+        .into_iter()
+        .map(|(region, _speech_duration)| region)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -310,7 +393,10 @@ fn sample_rate_to_enum(sr: u32) -> SampleRate {
         16000 => SampleRate::Rate16kHz,
         32000 => SampleRate::Rate32kHz,
         48000 => SampleRate::Rate48kHz,
-        _ => panic!("Invalid VAD sample rate: {}Hz (must be 8k, 16k, 32k, or 48k)", sr),
+        _ => panic!(
+            "Invalid VAD sample rate: {}Hz (must be 8k, 16k, 32k, or 48k)",
+            sr
+        ),
     }
 }
 
@@ -345,7 +431,8 @@ fn resample_for_vad(audio: &[f32], from_sr: u32, to_sr: u32) -> Vec<f32> {
     let mut output_f64 = vec![0.0f64; output_capacity];
 
     let input_adapter = InterleavedSlice::new(&input_f64, 1, n_input_frames).unwrap();
-    let mut output_adapter = InterleavedSlice::new_mut(&mut output_f64, 1, output_capacity).unwrap();
+    let mut output_adapter =
+        InterleavedSlice::new_mut(&mut output_f64, 1, output_capacity).unwrap();
 
     let (_frames_in, frames_out) = resampler
         .process_all_into_buffer(&input_adapter, &mut output_adapter, n_input_frames, None)
@@ -369,7 +456,9 @@ mod tests {
         let mut samples = Vec::with_capacity(n_samples);
         let mut state = seed;
         for _ in 0..n_samples {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let value = ((state >> 33) as f32 / u32::MAX as f32 - 0.5) * 1.0;
             samples.push(value);
         }
@@ -384,11 +473,11 @@ mod tests {
         let speech = make_noise(sr, 1.0, 42);
 
         let mut audio = Vec::new();
-        audio.extend_from_slice(&silence);       // 0-1s: silence
-        audio.extend_from_slice(&speech);         // 1-2s: speech
-        audio.extend_from_slice(&speech);         // 2-3s: speech
-        audio.extend_from_slice(&silence);        // 3-4s: silence
-        audio.extend_from_slice(&speech);         // 4-5s: speech
+        audio.extend_from_slice(&silence); // 0-1s: silence
+        audio.extend_from_slice(&speech); // 1-2s: speech
+        audio.extend_from_slice(&speech); // 2-3s: speech
+        audio.extend_from_slice(&silence); // 3-4s: silence
+        audio.extend_from_slice(&speech); // 4-5s: speech
 
         let regions = detect_speech_regions(&audio, sr);
 
@@ -425,17 +514,25 @@ mod tests {
         let half_silence: Vec<f32> = vec![0.0; sr as usize / 2];
 
         let mut audio = Vec::new();
-        audio.extend_from_slice(&silence);        // 0-1s: silence
-        audio.extend_from_slice(&short_speech);   // 1-1.5s: short speech
-        audio.extend_from_slice(&half_silence);   // 1.5-2s: silence
-        audio.extend_from_slice(&long_speech);    // 2-5s: long speech
+        audio.extend_from_slice(&silence); // 0-1s: silence
+        audio.extend_from_slice(&short_speech); // 1-1.5s: short speech
+        audio.extend_from_slice(&half_silence); // 1.5-2s: silence
+        audio.extend_from_slice(&long_speech); // 2-5s: long speech
 
         let result = find_first_speech_segment(&audio, sr, 2.0, 600.0);
 
         assert!(result.is_some(), "should find a speech segment");
         let (start, end) = result.unwrap();
-        assert!(start >= 1.5, "segment should start after the short speech, got {}", start);
-        assert!(end - start >= 2.0, "segment should be >= 2s, got {}s", end - start);
+        assert!(
+            start >= 1.5,
+            "segment should start after the short speech, got {}",
+            start
+        );
+        assert!(
+            end - start >= 2.0,
+            "segment should be >= 2s, got {}s",
+            end - start
+        );
     }
 
     #[test]
@@ -484,11 +581,11 @@ mod tests {
         let speech_3s = make_noise(sr, 3.0, 99);
 
         let mut audio = Vec::new();
-        audio.extend_from_slice(&silence_1s);   // 0-1s: silence
-        audio.extend_from_slice(&speech_15s);   // 1-16s: speech
-        audio.extend_from_slice(&silence_5s);   // 16-21s: silence (large gap)
-        audio.extend_from_slice(&speech_3s);    // 21-24s: speech
-        audio.extend_from_slice(&silence_1s);   // 24-25s: silence
+        audio.extend_from_slice(&silence_1s); // 0-1s: silence
+        audio.extend_from_slice(&speech_15s); // 1-16s: speech
+        audio.extend_from_slice(&silence_5s); // 16-21s: silence (large gap)
+        audio.extend_from_slice(&speech_3s); // 21-24s: speech
+        audio.extend_from_slice(&silence_1s); // 24-25s: silence
 
         let result = find_first_speech_segment(&audio, sr, 30.0, 600.0);
 
@@ -528,15 +625,15 @@ mod tests {
         let gap_1_5s: Vec<f32> = vec![0.0; (sr as f32 * 1.5) as usize];
 
         let mut audio = Vec::new();
-        audio.extend_from_slice(&silence_1s);                       // 0-1s: silence
-        audio.extend_from_slice(&make_noise(sr, 5.0, 10));         // 1-6s: speech
-        audio.extend_from_slice(&gap_1_5s);                         // 6-7.5s: gap (< 2s)
-        audio.extend_from_slice(&make_noise(sr, 5.0, 20));         // 7.5-12.5s: speech
-        audio.extend_from_slice(&gap_1_5s);                         // 12.5-14s: gap (< 2s)
-        audio.extend_from_slice(&make_noise(sr, 5.0, 30));         // 14-19s: speech
-        audio.extend_from_slice(&gap_1_5s);                         // 19-20.5s: gap (< 2s)
-        audio.extend_from_slice(&make_noise(sr, 5.0, 40));         // 20.5-25.5s: speech
-        audio.extend_from_slice(&silence_1s);                       // 25.5-26.5s: silence
+        audio.extend_from_slice(&silence_1s); // 0-1s: silence
+        audio.extend_from_slice(&make_noise(sr, 5.0, 10)); // 1-6s: speech
+        audio.extend_from_slice(&gap_1_5s); // 6-7.5s: gap (< 2s)
+        audio.extend_from_slice(&make_noise(sr, 5.0, 20)); // 7.5-12.5s: speech
+        audio.extend_from_slice(&gap_1_5s); // 12.5-14s: gap (< 2s)
+        audio.extend_from_slice(&make_noise(sr, 5.0, 30)); // 14-19s: speech
+        audio.extend_from_slice(&gap_1_5s); // 19-20.5s: gap (< 2s)
+        audio.extend_from_slice(&make_noise(sr, 5.0, 40)); // 20.5-25.5s: speech
+        audio.extend_from_slice(&silence_1s); // 25.5-26.5s: silence
 
         // min_duration=15s: no single region is >= 10s, so Tier 1 and 2 fail.
         // Tier 3 accumulates the nearby blocks.
@@ -557,6 +654,131 @@ mod tests {
             span >= 10.0,
             "accumulated span should cover multiple regions, got {}s",
             span
+        );
+    }
+
+    #[test]
+    fn test_find_speech_candidates_returns_multiple_ranked_regions() {
+        let sr: u32 = 16000;
+
+        let silence_1s: Vec<f32> = vec![0.0; sr as usize];
+        let silence_3s: Vec<f32> = vec![0.0; sr as usize * 3];
+        let speech_12s = make_noise(sr, 12.0, 11);
+        let speech_15s = make_noise(sr, 15.0, 22);
+        let speech_11s = make_noise(sr, 11.0, 33);
+
+        let mut audio = Vec::new();
+        audio.extend_from_slice(&silence_1s); // 0-1s: silence
+        audio.extend_from_slice(&speech_12s); // 1-13s: speech
+        audio.extend_from_slice(&silence_3s); // 13-16s: silence
+        audio.extend_from_slice(&speech_15s); // 16-31s: speech
+        audio.extend_from_slice(&silence_3s); // 31-34s: silence
+        audio.extend_from_slice(&speech_11s); // 34-45s: speech
+        audio.extend_from_slice(&silence_1s); // 45-46s: silence
+
+        let candidates = find_speech_candidates(&audio, sr, 30.0, 600.0, 3);
+
+        assert_eq!(
+            candidates.len(),
+            3,
+            "should return the requested candidates"
+        );
+
+        let durations: Vec<f64> = candidates.iter().map(|(start, end)| end - start).collect();
+        assert!(
+            durations[0] >= durations[1] && durations[1] >= durations[2],
+            "candidates should be sorted by duration, got {:?}",
+            durations
+        );
+
+        assert!(
+            candidates[0].0 >= 15.0 && candidates[0].0 <= 17.5,
+            "longest region should start around 16s, got {}",
+            candidates[0].0
+        );
+    }
+
+    #[test]
+    fn test_find_speech_candidates_falls_back_to_accumulated_clusters() {
+        let sr: u32 = 16000;
+
+        let silence_1s: Vec<f32> = vec![0.0; sr as usize];
+        let silence_4s: Vec<f32> = vec![0.0; sr as usize * 4];
+        let gap_1_5s: Vec<f32> = vec![0.0; (sr as f32 * 1.5) as usize];
+
+        let mut audio = Vec::new();
+        audio.extend_from_slice(&silence_1s); // 0-1s: silence
+        audio.extend_from_slice(&make_noise(sr, 5.0, 10)); // 1-6s: speech
+        audio.extend_from_slice(&gap_1_5s); // 6-7.5s: gap
+        audio.extend_from_slice(&make_noise(sr, 5.0, 20)); // 7.5-12.5s: speech
+        audio.extend_from_slice(&gap_1_5s); // 12.5-14s: gap
+        audio.extend_from_slice(&make_noise(sr, 5.0, 30)); // 14-19s: speech
+        audio.extend_from_slice(&silence_4s); // 19-23s: large gap
+        audio.extend_from_slice(&make_noise(sr, 5.0, 40)); // 23-28s: speech
+        audio.extend_from_slice(&gap_1_5s); // 28-29.5s: gap
+        audio.extend_from_slice(&make_noise(sr, 5.0, 50)); // 29.5-34.5s: speech
+        audio.extend_from_slice(&silence_1s); // 34.5-35.5s: silence
+
+        let candidates = find_speech_candidates(&audio, sr, 30.0, 600.0, 2);
+
+        assert_eq!(
+            candidates.len(),
+            2,
+            "should return both accumulated clusters"
+        );
+
+        let first_span = candidates[0].1 - candidates[0].0;
+        let second_span = candidates[1].1 - candidates[1].0;
+
+        assert!(
+            first_span > second_span,
+            "longer accumulated cluster should rank first"
+        );
+        assert!(
+            candidates[0].0 >= 0.5 && candidates[0].0 <= 2.0,
+            "first cluster should start around 1s, got {}",
+            candidates[0].0
+        );
+        assert!(
+            candidates[1].0 >= 22.0 && candidates[1].0 <= 24.5,
+            "second cluster should start around 23s, got {}",
+            candidates[1].0
+        );
+    }
+
+    #[test]
+    fn test_find_speech_candidates_skips_overlapping_clusters() {
+        let sr: u32 = 16000;
+
+        let silence_1s: Vec<f32> = vec![0.0; sr as usize];
+        let silence_4s: Vec<f32> = vec![0.0; sr as usize * 4];
+        let gap_1_5s: Vec<f32> = vec![0.0; (sr as f32 * 1.5) as usize];
+
+        let mut audio = Vec::new();
+        audio.extend_from_slice(&silence_1s); // 0-1s: silence
+        audio.extend_from_slice(&make_noise(sr, 12.0, 10)); // 1-13s: speech
+        audio.extend_from_slice(&gap_1_5s); // 13-14.5s: gap
+        audio.extend_from_slice(&make_noise(sr, 5.0, 20)); // 14.5-19.5s: speech
+        audio.extend_from_slice(&silence_4s); // 19.5-23.5s: large gap
+        audio.extend_from_slice(&make_noise(sr, 11.0, 30)); // 23.5-34.5s: speech
+        audio.extend_from_slice(&silence_1s); // 34.5-35.5s: silence
+
+        let candidates = find_speech_candidates(&audio, sr, 10.0, 600.0, 3);
+
+        assert_eq!(
+            candidates.len(),
+            2,
+            "overlapping accumulated clusters should not be added as extra candidates"
+        );
+        assert!(
+            candidates[0].0 >= 0.5 && candidates[0].0 <= 2.0,
+            "first independent candidate should start around 1s, got {}",
+            candidates[0].0
+        );
+        assert!(
+            candidates[1].0 >= 23.0 && candidates[1].0 <= 24.5,
+            "second independent candidate should start around 23.5s, got {}",
+            candidates[1].0
         );
     }
 }
