@@ -61,6 +61,11 @@ const OFFSET_AGREEMENT_TOLERANCE_S: f64 = 0.25;
 /// corroboration. Below this, the peak is too weak to treat as support.
 const MIN_CORROBORATING_CONFIDENCE: f64 = 0.35;
 
+/// Confidence gap small enough to treat two matches as operationally tied.
+/// This lets corroboration decide between near-equal peaks without letting a
+/// cluster of weak matches overrule a clearly stronger one.
+const CORROBORATION_CONFIDENCE_SLACK: f64 = 0.03;
+
 /// Small epsilon for comparing floating-point match scores during selection.
 const MATCH_EPSILON: f64 = 1e-9;
 
@@ -301,13 +306,15 @@ fn count_corroborating_candidates(attempts: &[MatchAttempt], anchor: MatchAttemp
 
 /// Select the best match attempt.
 ///
-/// The highest-confidence attempt wins. If multiple attempts tie on raw
-/// confidence, prefer the one corroborated by more candidate regions, then use
-/// the earlier window start as a stable final tie-breaker.
+/// The highest-confidence attempt wins unless two attempts are within
+/// `CORROBORATION_CONFIDENCE_SLACK`, in which case corroboration breaks the
+/// near-tie before raw confidence does. The earlier window start remains the
+/// stable final tie-breaker.
 ///
 /// This ordering is intentional: one sharp, distinctive peak should beat a
-/// crowd of weak guesses. Corroboration helps break ties, but it should not let
-/// several mediocre windows outweigh one clearly better match.
+/// crowd of weak guesses. Corroboration helps when peaks are effectively neck
+/// and neck, but it should not let several mediocre windows outweigh one
+/// clearly better match.
 fn select_best_match(attempts: &[MatchAttempt]) -> Option<MatchSelection> {
     if attempts.is_empty() {
         return None;
@@ -317,15 +324,25 @@ fn select_best_match(attempts: &[MatchAttempt]) -> Option<MatchSelection> {
     let mut best_corroboration = count_corroborating_candidates(attempts, best_attempt);
 
     for &attempt in attempts {
-        let stronger_confidence = attempt.confidence > (best_attempt.confidence + MATCH_EPSILON);
-        let tied_confidence = (attempt.confidence - best_attempt.confidence).abs() <= MATCH_EPSILON;
+        let confidence_delta = attempt.confidence - best_attempt.confidence;
+        let materially_stronger_confidence =
+            confidence_delta > CORROBORATION_CONFIDENCE_SLACK;
+        let near_tie_confidence =
+            confidence_delta.abs() <= CORROBORATION_CONFIDENCE_SLACK;
+        let higher_confidence_in_near_tie = confidence_delta > MATCH_EPSILON;
+        let exact_confidence_tie = confidence_delta.abs() <= MATCH_EPSILON;
         let attempt_corroboration = count_corroborating_candidates(attempts, attempt);
         let stronger_corroboration = attempt_corroboration > best_corroboration;
         let earlier_window = attempt.window_start < best_attempt.window_start;
 
-        if stronger_confidence
-            || (tied_confidence && stronger_corroboration)
-            || (tied_confidence && attempt_corroboration == best_corroboration && earlier_window)
+        if materially_stronger_confidence
+            || (near_tie_confidence && stronger_corroboration)
+            || (near_tie_confidence
+                && attempt_corroboration == best_corroboration
+                && higher_confidence_in_near_tie)
+            || (exact_confidence_tie
+                && attempt_corroboration == best_corroboration
+                && earlier_window)
         {
             best_attempt = attempt;
             best_corroboration = attempt_corroboration;
@@ -909,6 +926,39 @@ mod tests {
     }
 
     #[test]
+    fn test_select_best_match_uses_agreement_for_near_ties() {
+        let attempts = vec![
+            MatchAttempt {
+                candidate_index: 0,
+                window_start: 5.0,
+                total_offset: 12.0,
+                confidence: 0.62,
+            },
+            MatchAttempt {
+                candidate_index: 1,
+                window_start: 45.0,
+                total_offset: 20.0,
+                confidence: 0.60,
+            },
+            MatchAttempt {
+                candidate_index: 2,
+                window_start: 95.0,
+                total_offset: 20.1,
+                confidence: 0.48,
+            },
+        ];
+
+        let selection = select_best_match(&attempts).expect("selection should exist");
+
+        assert!(
+            (selection.attempt.total_offset - 20.0).abs() < 0.2,
+            "corroborated near-tie should win, got {}",
+            selection.attempt.total_offset
+        );
+        assert_eq!(selection.agreeing_candidates, 2);
+    }
+
+    #[test]
     fn test_select_best_match_keeps_stronger_single_match_over_weaker_group() {
         let attempts = vec![
             MatchAttempt {
@@ -934,6 +984,35 @@ mod tests {
                 window_start: 90.0,
                 total_offset: 24.9,
                 confidence: 0.26,
+            },
+        ];
+
+        let selection = select_best_match(&attempts).expect("selection should exist");
+
+        assert_eq!(selection.attempt.total_offset, 15.0);
+        assert_eq!(selection.agreeing_candidates, 1);
+    }
+
+    #[test]
+    fn test_select_best_match_keeps_materially_higher_confidence() {
+        let attempts = vec![
+            MatchAttempt {
+                candidate_index: 0,
+                window_start: 10.0,
+                total_offset: 15.0,
+                confidence: 0.64,
+            },
+            MatchAttempt {
+                candidate_index: 1,
+                window_start: 30.0,
+                total_offset: 25.0,
+                confidence: 0.60,
+            },
+            MatchAttempt {
+                candidate_index: 2,
+                window_start: 60.0,
+                total_offset: 25.1,
+                confidence: 0.49,
             },
         ];
 
