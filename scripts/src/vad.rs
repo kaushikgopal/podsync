@@ -258,37 +258,6 @@ pub fn find_speech_candidates(
     candidates
 }
 
-/// Find a speech segment suitable for cross-correlation.
-///
-/// Uses a three-tier strategy, from most to least reliable:
-///
-/// 1. **Single region >= min_duration**: A long contiguous speech region is
-///    ideal for correlation — it gives a clean, unambiguous peak.
-///
-/// 2. **Longest single region >= MIN_SINGLE_REGION_DURATION_S**: If no single
-///    region meets min_duration but one is at least 10s, use it. A shorter
-///    but contiguous region is more reliable than stitching fragments.
-///
-/// 3. **Accumulated nearby regions**: As a last resort, accumulate consecutive
-///    regions within ACCUMULATION_GAP_LIMIT_S of each other until we reach
-///    min_duration.
-///
-/// Returns (start_time, end_time), or None if no speech was found at all.
-pub fn find_first_speech_segment(
-    audio: &[f32],
-    sr: u32,
-    min_duration: f64,
-    search_limit: f64,
-) -> Option<Region> {
-    let candidates = find_speech_candidates(audio, sr, min_duration, search_limit, 1);
-
-    if let Some(&region) = candidates.first() {
-        Some(region)
-    } else {
-        None
-    }
-}
-
 /// Push a region into `candidates` unless it overlaps an existing candidate or
 /// the target length has already been reached.
 ///
@@ -519,7 +488,9 @@ mod tests {
         audio.extend_from_slice(&half_silence); // 1.5-2s: silence
         audio.extend_from_slice(&long_speech); // 2-5s: long speech
 
-        let result = find_first_speech_segment(&audio, sr, 2.0, 600.0);
+        let result = find_speech_candidates(&audio, sr, 2.0, 600.0, 1)
+            .into_iter()
+            .next();
 
         assert!(result.is_some(), "should find a speech segment");
         let (start, end) = result.unwrap();
@@ -540,7 +511,9 @@ mod tests {
         let sr: u32 = 16000;
         let audio: Vec<f32> = vec![0.0; sr as usize * 2];
 
-        let result = find_first_speech_segment(&audio, sr, 30.0, 600.0);
+        let result = find_speech_candidates(&audio, sr, 30.0, 600.0, 1)
+            .into_iter()
+            .next();
 
         assert!(result.is_none(), "pure silence should return None");
     }
@@ -587,7 +560,9 @@ mod tests {
         audio.extend_from_slice(&speech_3s); // 21-24s: speech
         audio.extend_from_slice(&silence_1s); // 24-25s: silence
 
-        let result = find_first_speech_segment(&audio, sr, 30.0, 600.0);
+        let result = find_speech_candidates(&audio, sr, 30.0, 600.0, 1)
+            .into_iter()
+            .next();
 
         assert!(result.is_some(), "Tier 2 should find a segment");
         let (start, end) = result.unwrap();
@@ -637,7 +612,9 @@ mod tests {
 
         // min_duration=15s: no single region is >= 10s, so Tier 1 and 2 fail.
         // Tier 3 accumulates the nearby blocks.
-        let result = find_first_speech_segment(&audio, sr, 15.0, 600.0);
+        let result = find_speech_candidates(&audio, sr, 15.0, 600.0, 1)
+            .into_iter()
+            .next();
 
         assert!(result.is_some(), "Tier 3 should find a segment");
         let (start, end) = result.unwrap();

@@ -55,10 +55,10 @@ Proceed with sync?
 
 ### Step 4: Run Sync
 
-Execute the CLI:
+Execute the repo-local CLI:
 
 ```bash
-podsync \
+scripts/podsync \
   --master "{master_path}" \
   --tracks "{track1}" --tracks "{track2}" \
   --sync-window 120 \
@@ -76,7 +76,7 @@ Display the CLI output showing:
 ## CLI Reference
 
 ```bash
-podsync \
+scripts/podsync \
   --master <path>           # Master/sync reference track (required)
   --tracks <path>           # Individual tracks to sync (required, repeat for multiple)
   --sync-window <seconds>   # Seconds of speech for correlation (default: 120)
@@ -93,7 +93,7 @@ podsync \
 
 ## Prerequisites
 
-- **podsync** binary built via `make` in the repo root
+- **Repo-local binary** built via `make` in the repo root at `scripts/podsync`
 - See the repo README for build instructions
 
 ## File Naming Conventions
