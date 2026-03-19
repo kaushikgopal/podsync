@@ -1,6 +1,8 @@
-# podsync
+# PodSync
 
 Automatically align multi-track podcast recordings to a master track.
+
+For the backstory and an interactive walkthrough of the algorithm, see the [blog post](https://kau.sh/blog/podsync/).
 
 ## The problem
 
@@ -11,13 +13,13 @@ Many podcasts are recorded as "double-enders" or "triple-enders" — each partic
 
 The individual tracks are better for editing (cleaner audio, per-person volume control, noise removal), but they don't start at the same time as the master. One host might join a few seconds late, recording devices have different start times, and clock drift means tracks slowly desync over the course of an hour.
 
-Podsync fixes this. Give it the master track and the individual tracks, and it outputs new WAV files that are time-aligned to the master. Drop them all into your DAW at position 0:00 and they line up.
+PodSync fixes this. Give it the master track and the individual tracks, and it outputs new WAV files that are time-aligned to the master. Drop them all into your DAW at position 0:00 and they line up.
 
 ## How it works
 
-1. **Voice Activity Detection** — Uses WebRTC VAD to find where speech actually occurs in each track. This handles cases where a participant is silent at the start.
-2. **MFCC Cross-Correlation** — Extracts Mel-frequency cepstral coefficients (spectral features used in speech recognition) from both the master and each track, then cross-correlates to find the precise time offset. MFCCs are robust to volume differences, EQ differences, and the fact that a single voice needs to match against a mixed master.
-3. **Drift Measurement** — Correlates again near the end of the recording and compares the offset to the start. The difference is drift caused by different clock rates between recording devices. Podsync reports the drift so you know if manual adjustment is needed.
+1. **Voice Activity Detection** — Uses WebRTC VAD to find where speech actually occurs in each track, then selects up to 3 strong speech candidates (longer, contiguous regions preferred).
+2. **Multi-candidate MFCC Cross-Correlation** — Extracts Mel-frequency cepstral coefficients (spectral features used in speech recognition) from the master once, then compares each candidate window against it. Long candidates get sub-windows sampled from the start, middle, and end. The highest-confidence match wins; if a second independent region agrees on the same offset, that corroboration is used as a tie-breaker. MFCCs are robust to volume differences, EQ differences, and the fact that a single voice needs to match against a mixed master.
+3. **Drift Measurement** — Correlates again near the end of the recording and compares the offset to the start. The difference is drift caused by different clock rates between recording devices. PodSync reports the drift so you know if manual adjustment is needed.
 4. **Output** — Pads or trims each track to match the master's length and writes synced WAV files.
 
 See [ALGORITHM.md](.agents/skills/podsync/references/ALGORITHM.md) for the full technical deep dive.
@@ -121,6 +123,7 @@ cd scripts && cargo test
 |-------|---------|
 | [symphonia](https://github.com/pdeljanov/Symphonia) | Decode MP3, WAV, FLAC, OGG, AIFF |
 | [rubato](https://github.com/HEnquist/rubato) | Resample to 44.1kHz |
+| [audioadapter-buffers](https://crates.io/crates/audioadapter-buffers) | Buffer adapter for rubato's resampler API |
 | [hound](https://github.com/ruuda/hound) | Write 24-bit WAV |
 | [webrtc-vad](https://crates.io/crates/webrtc-vad) | Voice activity detection (Google WebRTC C lib) |
 | [realfft](https://github.com/HEnquist/realfft) | FFT for MFCC extraction and cross-correlation |
