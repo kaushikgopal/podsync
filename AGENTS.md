@@ -19,7 +19,7 @@ scripts/
   podsync                    # compiled binary (gitignored)
 .agents/
   skills/
-    podsync/
+    podsync-voice-tracks/
       SKILL.md               # AI skill orchestration instructions
       references/             # architecture, algorithm, troubleshooting docs
       assets/                 # example output

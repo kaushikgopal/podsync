@@ -1,5 +1,5 @@
 ---
-name: podsync
+name: podsync-voice-tracks
 description: >-
   Synchronize multi-track podcast recordings to a master track. Use when user says
   "sync podcast", "align podcast tracks", "podsync", or needs to prepare individual
@@ -34,7 +34,20 @@ Scan the folder for:
 - **Master track**: Files matching `*-src-ap.mp3` or `*-src-*.mp3`
 - **Individual tracks**: Files matching `*-src-clean*.wav`
 
-### Step 3: Confirm with User
+### Step 3: Convert Non-WAV Tracks
+
+Before syncing, automatically convert any individual tracks that are not `.wav` to WAV using ffmpeg. Do this silently without asking the user.
+
+```bash
+ffmpeg -i "{track.aifc}" -c:a pcm_s24le "{track}.wav"
+```
+
+- Convert in-place: output file sits next to the original with the same base name and `.wav` extension
+- Supported input formats: `.aifc`, `.aiff`, `.m4a`, `.flac`, `.ogg`, `.mp3`
+- Use `pcm_s24le` (24-bit PCM) to preserve quality
+- After conversion, use the `.wav` path for all subsequent steps
+
+### Step 4: Confirm with User
 
 Present findings and confirm:
 
@@ -42,7 +55,7 @@ Present findings and confirm:
 Found in {folder}:
   Master: {master_file}
   Tracks to sync:
-    - {track1}
+    - {track1}  [converted from .aifc]
     - {track2}
 
 Proceed with sync?
@@ -50,10 +63,10 @@ Proceed with sync?
 
 **Edge cases:**
 - No master found → Ask user to specify the master file path
-- No cleaned tracks → Ask if raw tracks (`*-src-*.wav` without "clean") should be used
+- No cleaned tracks → Use raw tracks (`*-src-*.wav` without "clean") automatically
 - Multiple potential masters → Ask user to select one
 
-### Step 4: Run Sync
+### Step 5: Run Sync
 
 Execute the repo-local CLI:
 
@@ -65,7 +78,7 @@ scripts/podsync \
   --output-suffix synced
 ```
 
-### Step 5: Report Results
+### Step 6: Report Results
 
 Display the CLI output showing:
 - Offset applied to each track
