@@ -1,4 +1,5 @@
-.agents/tmp/**
+.agents/dox/handoff-*
+.agents/dox/brief-*
 
 # Rust
 scripts/target/
